@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Digests · Digest Agent</title>
+<!--
+  Reading view for generated digests. Same posture as the other console pages:
+  one self-contained file, no external requests, inert shell, key supplied by
+  the browser.
+
+  The HTML for a digest body is rendered and sanitised server-side (see
+  sanitize.md_to_safe_html) — this page never builds markup out of digest text
+  itself, which is why the body is the one place innerHTML takes unescaped
+  content.
+-->
+<style>
+  :root {
+    --bg: #fbfbfa; --panel: #fff; --ink: #1a1a18; --muted: #6b6b66;
+    --line: #e4e4e0; --accent: #2f5d50; --warn: #8a5a00; --bad: #a3352b; --good: #2f6b3a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a; --panel: #1e2024; --ink: #e8e8e4; --muted: #9a9a94;
+      --line: #2e3138; --accent: #7fbfa8; --warn: #d0a24c; --bad: #e0796b; --good: #7fbf8f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+           padding: 1rem 1.25rem; border-bottom: 1px solid var(--line);
+           background: var(--panel); position: sticky; top: 0; z-index: 5; }
+  h1 { font-size: 1.05rem; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  a { color: var(--accent); }
+  main { padding: 1.25rem; max-width: 1180px; margin: 0 auto; display: grid; gap: 1rem; }
+  section { background: var(--panel); border: 1px solid var(--line);
+            border-radius: 10px; padding: 1rem; }
+  h2 { font-size: .78rem; text-transform: uppercase; letter-spacing: .07em;
+       color: var(--muted); margin: 0 0 .75rem; font-weight: 650; }
+  button { font: inherit; font-size: .85rem; padding: .35rem .7rem; border-radius: 7px;
+           border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+           cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  input[type=password] { font: inherit; font-size: .85rem; padding: .35rem .5rem;
+                         border-radius: 7px; border: 1px solid var(--line);
+                         background: var(--bg); color: var(--ink);
+                         width: 100%; margin: .5rem 0; }
+  .pill { font-size: .72rem; padding: .1rem .45rem; border-radius: 999px;
+          border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .pill.warn { color: var(--warn); border-color: currentColor; }
+  .sub { color: var(--muted); font-size: .82rem; }
+  #msg { padding: .5rem .75rem; border-radius: 7px; font-size: .85rem; display: none; }
+  #msg.show { display: block; }
+  #msg.err { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
+  #msg.ok { background: color-mix(in srgb, var(--good) 12%, transparent); color: var(--good); }
+  #gate { padding: 2rem 1.25rem; max-width: 420px; margin: 3rem auto; }
+
+  /* Two panes: the week being read, and the weeks available. On a narrow
+     screen the list drops below the digest rather than squeezing it. */
+  .split { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr) 15rem;
+           align-items: start; }
+  @media (max-width: 860px) { .split { grid-template-columns: minmax(0, 1fr); } }
+
+  .weeks { display: flex; flex-direction: column; gap: .15rem;
+           max-height: 70vh; overflow-y: auto; }
+  .weeks button { text-align: left; border-color: transparent; padding: .4rem .55rem;
+                  display: block; width: 100%; }
+  .weeks button:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .weeks button.here { background: var(--accent); color: var(--bg); font-weight: 600; }
+  .weeks button.here .sub { color: var(--bg); opacity: .85; }
+  .weeks .sub { display: block; font-size: .75rem; }
+
+  .facts { display: flex; flex-wrap: wrap; gap: .35rem .5rem; margin: 0 0 .8rem; }
+
+  /* Digest body. The markup here is server-rendered and server-sanitised. */
+  .doc { line-height: 1.65; overflow-wrap: break-word; }
+  .doc h1 { font-size: 1.35rem; font-weight: 680; margin: 0 0 .3rem;
+            letter-spacing: -0.01em; text-transform: none; }
+  .doc h2 { font-size: .95rem; font-weight: 680; color: var(--ink); margin: 1.6rem 0 .6rem;
+            text-transform: none; letter-spacing: 0; padding-bottom: .3rem;
+            border-bottom: 1px solid var(--line); }
+  .doc h3 { font-size: .92rem; font-weight: 640; margin: 1.3rem 0 .35rem; }
+  .doc p { margin: .6rem 0; }
+  .doc ul, .doc ol { margin: .5rem 0; padding-left: 1.4rem; }
+  .doc li { margin: .25rem 0; }
+  .doc code { font-size: .86em; background: color-mix(in srgb, var(--ink) 8%, transparent);
+              padding: .1rem .3rem; border-radius: 4px; }
+  .doc pre { background: color-mix(in srgb, var(--ink) 6%, transparent); padding: .7rem;
+             border-radius: 8px; overflow-x: auto; }
+  .doc pre code { background: none; padding: 0; }
+  .doc blockquote { margin: .7rem 0; padding: .1rem 0 .1rem .9rem;
+                    border-left: 3px solid var(--line); color: var(--muted); }
+  .doc hr { border: 0; border-top: 1px solid var(--line); margin: 1.4rem 0; }
+  .doc table { width: 100%; border-collapse: collapse; font-size: .87rem; margin: .7rem 0; }
+  .doc th, .doc td { border: 1px solid var(--line); padding: .35rem .5rem; text-align: left; }
+  .doc em { color: var(--muted); }
+  .doc h1 + p em { font-style: normal; }
+
+  pre.raw { white-space: pre-wrap; font-size: .82rem; line-height: 1.5;
+            background: color-mix(in srgb, var(--ink) 5%, transparent);
+            padding: .8rem; border-radius: 8px; overflow-x: auto; margin: 0; }
+</style>
+</head>
+<body>
+
+<div id="gate" hidden>
+  <h1>Digests</h1>
+  <p class="sub">Enter the admin API key. Kept in this tab only.</p>
+  <input type="password" id="key" placeholder="API key">
+  <button class="primary" id="unlock">Unlock</button>
+  <p class="sub" id="gateErr" style="color:var(--bad)"></p>
+</div>
+
+<div id="app" hidden>
+<!--NAV-->
+<header>
+  <h1>Digests</h1>
+  <span class="pill" id="count"></span>
+  <span style="flex:1"></span>
+  <button id="rawBtn">View Markdown</button>
+  <button id="reload">Refresh</button>
+  <button id="forget">Forget key</button>
+</header>
+
+<main>
+  <div id="msg"></div>
+
+  <div class="split">
+    <section>
+      <div class="facts" id="facts"></div>
+      <div id="body" class="doc"></div>
+    </section>
+
+    <section>
+      <h2>Weeks</h2>
+      <div class="weeks" id="weeks"></div>
+      <p class="sub" style="margin:.8rem 0 0">
+        Newest first. Each digest covers only what was published since the
+        previous one ended — episodes pulled in by
+        <a href="/admin/backfill">historical intake</a> go to the per-podcast
+        archive files instead, so starting a backfill never changes a weekly
+        digest.
+        <br><br>
+        Generating twice in the same week writes a <em>second</em> file
+        (<code>-r2</code>) rather than overwriting the first, so nothing already
+        in your vault is ever rewritten. Both are listed, tagged
+        <span class="pill">run 1</span> and <span class="pill">run 2</span>, and
+        each covers only its own period.
+      </p>
+    </section>
+  </div>
+</main>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const KEY_NAME = "podagent_key";
+  const $ = (id) => document.getElementById(id);
+  let digests = [];
+  let current = null;     // the loaded digest payload
+  let raw = false;        // Markdown source instead of rendered
+
+  const key = () => sessionStorage.getItem(KEY_NAME) || "";
+
+  async function api(path, options = {}) {
+    const res = await fetch(path, {
+      ...options,
+      headers: {
+        "X-API-Key": key(),
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...(options.headers || {}),
+      },
+    });
+    if (res.status === 401) { lock("Key rejected."); throw new Error("unauthorised"); }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const d = body.detail;
+      throw new Error(typeof d === "string" ? d : JSON.stringify(d || `HTTP ${res.status}`));
+    }
+    return body;
+  }
+
+  function say(text, kind = "ok") {
+    const el = $("msg");
+    el.textContent = text;
+    el.className = `show ${kind}`;
+    if (kind === "ok") setTimeout(() => { el.className = ""; }, 6000);
+  }
+
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+  const day = (iso) => {
+    if (!iso) return "–";
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? "–" : d.toISOString().slice(0, 10);
+  };
+
+  function renderWeeks() {
+    // One entry per file, not per week. Generating twice in a week writes a
+    // second file rather than overwriting the first, so listing weeks alone
+    // hid whichever run was not the latest.
+    const rows = digests.flatMap((d) =>
+      (d.runs || []).map((r) => ({ week: d.period_key, ...r })));
+    $("count").textContent = rows.length === 1 ? "1 digest" : `${rows.length} digests`;
+
+    $("weeks").innerHTML = rows.map((r) => {
+      const here = current && r.week === current.period_key && r.run === current.run;
+      const multi = digests.find((d) => d.period_key === r.week).runs.length > 1;
+      return `<button data-week="${esc(r.week)}" data-run="${esc(r.run)}"
+              class="${here ? "here" : ""}">
+        ${esc(r.week)}${multi ? ` <span class="pill">run ${esc(r.run)}</span>` : ""}
+        <span class="sub">${day(r.from)} → ${day(r.to)} · ${esc(r.episodes)} ep</span>
+      </button>`;
+    }).join("") || `<p class="sub">No digests yet. One is generated every Friday.</p>`;
+
+    document.querySelectorAll("[data-week]").forEach((el) =>
+      el.addEventListener("click", () => open(el.dataset.week, Number(el.dataset.run))));
+  }
+
+  function renderDigest() {
+    if (!current) {
+      $("facts").innerHTML = "";
+      $("body").innerHTML = `<p class="sub">Select a week.</p>`;
+      return;
+    }
+    const fm = current.frontmatter || {};
+    const stats = current.stats || {};
+    const facts = [
+      `${day(current.from)} → ${day(current.to)}`,
+      `${current.episodes} episodes`,
+      fm.episodes_summarized != null ? `${fm.episodes_summarized} summarized` : "",
+      fm.asr_runs ? `${fm.asr_runs} transcribed locally` : "",
+      stats.total_cost_usd != null
+        ? `$${Number(stats.total_cost_usd).toFixed(4)}`
+        : (fm.total_cost_usd != null ? `$${esc(fm.total_cost_usd)}` : ""),
+      current.generated_at ? `generated ${day(current.generated_at)}` : "",
+      (current.runs || []).length > 1
+        ? `run ${current.run} of ${current.runs.length} for this week` : "",
+    ].filter(Boolean);
+    if (!current.marking_complete) {
+      facts.push("incomplete — generation was interrupted");
+    }
+    $("facts").innerHTML = facts.map((f) =>
+      `<span class="pill${f.startsWith("incomplete") ? " warn" : ""}">${esc(f)}</span>`).join("");
+
+    if (raw) {
+      // Markdown source: escaped, because this is the unrendered text.
+      $("body").innerHTML = `<pre class="raw">${esc(current.markdown)}</pre>`;
+    } else {
+      // Rendered and sanitised server-side against a tag allowlist; see the
+      // comment at the top of this file.
+      $("body").innerHTML = current.html;
+    }
+    $("rawBtn").textContent = raw ? "View rendered" : "View Markdown";
+  }
+
+  async function open(week, run = 0) {
+    try {
+      current = await api(
+        `/api/v1/digests/${encodeURIComponent(week)}${run ? `?run=${run}` : ""}`);
+      renderWeeks();
+      renderDigest();
+    } catch (err) {
+      if (err.message === "unauthorised") return;
+      current = null;
+      renderWeeks();
+      $("facts").innerHTML = "";
+      $("body").innerHTML =
+        `<p class="sub">${esc(week)} could not be read: ${esc(err.message)}</p>`;
+    }
+  }
+
+  async function load() {
+    try {
+      digests = (await api("/api/v1/digests")).digests || [];
+      renderWeeks();
+      // ?week= lets another page link at a specific digest — the Episodes
+      // drawer does, for "which digest did this end up in?". Otherwise the most
+      // recent is what someone opening this page came for.
+      const asked = new URLSearchParams(location.search).get("week");
+      const wanted = (current && current.period_key)
+        || (asked && digests.some((d) => d.period_key === asked) ? asked : null)
+        || (digests[0] && digests[0].period_key);
+      if (wanted) await open(wanted, (current && current.run) || 0);
+      else renderDigest();
+    } catch (err) {
+      if (err.message !== "unauthorised") say(`Load failed: ${err.message}`, "err");
+    }
+  }
+
+  async function unlock() {
+    const value = $("key").value.trim();
+    if (!value) return;
+    sessionStorage.setItem(KEY_NAME, value);
+    try { await api("/api/v1/digests"); start(); }
+    catch { sessionStorage.removeItem(KEY_NAME); $("gateErr").textContent = "That key was rejected."; }
+  }
+
+  function lock(reason) {
+    sessionStorage.removeItem(KEY_NAME);
+    $("app").hidden = true; $("gate").hidden = false;
+    $("gateErr").textContent = reason || "";
+  }
+
+  function start() { $("gate").hidden = true; $("app").hidden = false; load(); }
+
+  $("unlock").addEventListener("click", unlock);
+  $("key").addEventListener("keydown", (e) => { if (e.key === "Enter") unlock(); });
+  $("reload").addEventListener("click", load);
+  $("forget").addEventListener("click", () => lock("Key cleared."));
+  $("rawBtn").addEventListener("click", () => { raw = !raw; renderDigest(); });
+
+  if (key()) start(); else $("gate").hidden = false;
+})();
+</script>
+</body>
+</html>

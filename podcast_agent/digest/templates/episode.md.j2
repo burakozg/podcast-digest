@@ -1,0 +1,39 @@
+{# Same whitespace convention as digest.md.j2: lone plain {% %} tags only. #}
+---
+type: podcast-episode
+podcast: {{ e.podcast_name }}
+episode: {{ e.title }}
+published: {{ e.published_date }}
+score: {{ e.score }}
+basis: {{ e.basis }}
+digest: {{ week }}
+{% if e.interest_keys %}
+interests: [{{ e.interest_keys | join(', ') }}]
+{% endif %}
+tags: [podcast-episode, cybersecurity]
+---
+
+# {{ e.title }}
+
+*{{ e.podcast_name }} · {{ e.published_date }} · {{ e.duration }} · basis: {{ e.basis_label }}{% if e.link %} · [episode link]({{ e.link }}){% endif %}*
+
+**Why it matters:** {{ e.why_it_matters }}
+
+{{ e.summary_md }}
+
+{% if e.key_takeaways %}
+## Key takeaways
+
+{% for bullet in e.key_takeaways %}
+- {{ bullet }}
+{% endfor %}
+
+{% endif %}
+{% if e.entity_links %}
+## Mentioned
+
+{{ e.entity_links | join(' · ') }}
+
+{% endif %}
+---
+*Part of [[podcast-digest-{{ week }}]].*

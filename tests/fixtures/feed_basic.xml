@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"
+     xmlns:podcast="https://podcastindex.org/namespace/1.0">
+  <channel>
+    <title>Test Show</title>
+    <link>https://example.com</link>
+    <description>A test feed</description>
+
+    <!-- Ordinary episode with a full description. -->
+    <item>
+      <title>Ep 3: PLC malware in water utilities</title>
+      <link>https://example.com/ep3</link>
+      <guid isPermaLink="false">ep-3-guid</guid>
+      <pubDate>Tue, 28 Jul 2026 10:00:00 +0000</pubDate>
+      <description><![CDATA[<p>We dig into a <b>PLC</b> compromise at a water utility, covering Modbus abuse &amp; segmentation.</p>]]></description>
+      <itunes:duration>1:02:00</itunes:duration>
+      <enclosure url="https://cdn-host.net/ep3.mp3" length="45000000" type="audio/mpeg"/>
+    </item>
+
+    <!-- Episode exposing a Podcasting 2.0 transcript. -->
+    <item>
+      <title>Ep 2: Agent security roundtable</title>
+      <link>https://example.com/ep2</link>
+      <guid isPermaLink="false">ep-2-guid</guid>
+      <pubDate>Tue, 21 Jul 2026 10:00:00 +0000</pubDate>
+      <description>Prompt injection and agent sandboxing.</description>
+      <itunes:duration>2400</itunes:duration>
+      <enclosure url="https://cdn-host.net/ep2.mp3" length="30000000" type="audio/mpeg"/>
+      <podcast:transcript url="https://transcript-host.net/ep2.vtt" type="text/vtt" language="en"/>
+      <podcast:transcript url="https://transcript-host.net/ep2.txt" type="text/plain" language="en"/>
+    </item>
+
+    <!-- No enclosure: unsupported in v1, must be skipped not crashed on. -->
+    <item>
+      <title>Ep 1: Announcement (no audio)</title>
+      <link>https://example.com/ep1</link>
+      <guid isPermaLink="false">ep-1-guid</guid>
+      <pubDate>Tue, 14 Jul 2026 10:00:00 +0000</pubDate>
+      <description>A text-only post.</description>
+    </item>
+
+    <!-- Enclosure on a domain that is neither the feed's nor allowlisted. -->
+    <item>
+      <title>Ep 0: Hosted somewhere unexpected</title>
+      <link>https://example.com/ep0</link>
+      <guid isPermaLink="false">ep-0-guid</guid>
+      <pubDate>Tue, 07 Jul 2026 10:00:00 +0000</pubDate>
+      <description>Audio on an unknown host.</description>
+      <enclosure url="https://sketchy-host.org/ep0.mp3" length="1000" type="audio/mpeg"/>
+    </item>
+  </channel>
+</rss>

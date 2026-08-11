@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Episodes · Digest Agent</title>
+<!--
+  Episode browser. Its own page because it is the one screen you scroll and read
+  rather than glance at, and it needs the width.
+-->
+<style>
+  :root {
+    --bg: #fbfbfa; --panel: #fff; --ink: #1a1a18; --muted: #6b6b66;
+    --line: #e4e4e0; --accent: #2f5d50; --warn: #8a5a00; --bad: #a3352b;
+    --good: #2f6b3a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a; --panel: #1e2024; --ink: #e8e8e4; --muted: #9a9a94;
+      --line: #2e3138; --accent: #7fbfa8; --warn: #d0a24c; --bad: #e0796b;
+      --good: #7fbf8f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+    padding: 1rem 1.25rem; border-bottom: 1px solid var(--line); background: var(--panel);
+    position: sticky; top: 0; z-index: 5;
+  }
+  h1 { font-size: 1.05rem; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  a { color: var(--accent); }
+  main { padding: 1.25rem; max-width: 1100px; margin: 0 auto; display: grid; gap: 1rem; }
+  .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  section {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1rem;
+  }
+  h2 { font-size: .78rem; text-transform: uppercase; letter-spacing: .07em;
+       color: var(--muted); margin: 0 0 .75rem; font-weight: 650; }
+  .stat { font-size: 1.7rem; font-weight: 640; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); font-size: .84rem; }
+  .row { display: flex; justify-content: space-between; gap: .75rem; padding: .3rem 0;
+         border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .row span:last-child { font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-size: .87rem; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: .35rem .5rem;
+       border-bottom: 1px solid var(--line); font-size: .78rem; }
+  td { padding: .35rem .5rem; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: 0; }
+  .scroll { overflow-x: auto; }
+  button {
+    font: inherit; font-size: .88rem; padding: .45rem .85rem; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  .controls { display: flex; gap: .5rem; flex-wrap: wrap; }
+  .pill { font-size: .74rem; padding: .12rem .5rem; border-radius: 999px;
+          border: 1px solid var(--line); color: var(--muted); }
+  .pill.on { color: var(--good); border-color: currentColor; }
+  .pill.off { color: var(--warn); border-color: currentColor; }
+  .pill.bad { color: var(--bad); border-color: currentColor; }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: .4rem; }
+  .bar > div { height: 100%; background: var(--accent); }
+  pre { margin: 0; font-size: .8rem; white-space: pre-wrap; word-break: break-word;
+        color: var(--muted); max-height: 220px; overflow: auto; }
+  #msg { padding: .5rem .75rem; border-radius: 7px; font-size: .85rem; display: none; }
+  #msg.show { display: block; }
+  #msg.err { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
+  #msg.ok { background: color-mix(in srgb, var(--good) 12%, transparent); color: var(--good); }
+  #gate { padding: 2rem 1.25rem; max-width: 420px; margin: 3rem auto; }
+  select, input[type=search] {
+    font: inherit; font-size: .88rem; padding: .4rem .55rem; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  }
+  .filters { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-bottom: .8rem; }
+  /* Wraps as a unit and never inside itself. */
+  .pager { display: inline-flex; gap: .5rem; align-items: center; white-space: nowrap; }
+  tr.ep { cursor: pointer; }
+  tr.ep:hover td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  tr.ep.sel td { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  .yes { color: var(--good); font-weight: 600; }
+  .no { color: var(--muted); }
+  .basis { font-size: .74rem; color: var(--muted); }
+  #drawer {
+    position: fixed; inset: 0 0 0 auto; width: min(640px, 100%); background: var(--panel);
+    border-left: 1px solid var(--line); padding: 1.25rem; overflow-y: auto; z-index: 20;
+    box-shadow: -12px 0 40px rgba(0,0,0,.18);
+  }
+  #drawer[hidden] { display: none; }
+  #drawer h3 { margin: .2rem 0 .3rem; font-size: 1.05rem; line-height: 1.35; }
+  #drawer .summary { white-space: pre-wrap; margin-top: .8rem; }
+  #drawer ul { margin: .4rem 0 0; padding-left: 1.1rem; }
+  .closebar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+  input[type=password] {
+    font: inherit; width: 100%; padding: .5rem .65rem; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink); margin: .5rem 0;
+  }
+
+</style>
+</head>
+<body>
+
+<div id="gate" hidden>
+  <h1>Episodes</h1>
+  <p class="sub">Enter the admin API key. Kept in this tab only.</p>
+  <input type="password" id="key" placeholder="API key">
+  <button class="primary" id="unlock">Unlock</button>
+  <p class="sub" id="gateErr" style="color:var(--bad)"></p>
+</div>
+
+<div id="app" hidden>
+<!--NAV-->
+<header>
+  <h1>Episodes</h1>
+  <span style="flex:1"></span>
+  <button id="forget">Forget key</button>
+</header>
+
+<main>
+  <div id="msg"></div>
+  <section>
+    <h2>Search</h2>
+    <div class="filters">
+      <input type="search" id="sQuery" placeholder="Words in summaries or transcripts…" size="30">
+      <select id="sField">
+        <option value="">Everywhere</option>
+        <option value="summary">Summaries only</option>
+        <option value="transcript">Transcripts only</option>
+        <option value="takeaways">Key takeaways</option>
+        <option value="entities">Named entities</option>
+        <option value="title">Titles</option>
+      </select>
+      <button id="sGo" class="primary">Search</button>
+      <button id="sClear">Clear</button>
+      <span class="sub" id="sStatus"></span>
+      <button id="sRebuild">Rebuild index</button>
+    </div>
+    <div id="sResults"></div>
+    <p class="sub" style="margin:.2rem 0 1.2rem">
+      Searches a <code>search.db</code> index built from the database rather than
+      the database itself. It re-syncs on a schedule, so a summary written in the
+      last half hour may not be findable yet — <em>Rebuild index</em> forces it.
+      Whole words, all of them required. The box below the table filters only the
+      page you are looking at.
+    </p>
+
+    <h2>Episodes</h2>
+    <div class="filters">
+      <select id="fShow"><option value="">All podcasts</option></select>
+      <select id="fStatus">
+        <option value="">Any status</option>
+        <option>NEW</option><option>TRIAGED</option>
+        <option>AWAITING_TRANSCRIPT</option><option>TRANSCRIBED</option>
+        <option>TRANSCRIPT_FAILED</option><option>READY_FOR_DIGEST</option>
+        <option>DIGEST_DIRECT</option><option>SCORED_LOW</option>
+        <option>DROPPED</option><option>PUBLISHED</option><option>ERROR</option>
+      </select>
+      <!-- Bands rather than a floor, so the low end is reachable: "what did
+           triage reject?" is as real a question as "what is worth reading?" -->
+      <select id="fScore">
+        <option value="">Any score</option>
+        <option value="9-10">9+ — the best of them</option>
+        <option value="7-10">7+ — digest-worthy</option>
+        <option value="4-6">4 to 6 — one-liners</option>
+        <option value="0-3">below 4 — dropped at triage</option>
+      </select>
+      <!-- The reader's own marks, which are the only filters here that the
+           pipeline cannot derive. "Flagged" is the one Theme C reads. -->
+      <select id="fSignal">
+        <option value="">Anything</option>
+        <option value="starred">★ starred</option>
+        <option value="unread">unread</option>
+        <option value="flagged">flagged as a wrong call</option>
+      </select>
+      <!-- Published does not imply summarised: the grey zone and the archive
+           both list episodes without one. This is how you find the ones worth
+           asking for. -->
+      <select id="fSummary">
+        <option value="">Summarised or not</option>
+        <option value="yes">has a summary</option>
+        <option value="no">no summary yet</option>
+      </select>
+      <input type="search" id="fText" placeholder="Filter titles…" size="18">
+      <button id="epReload">Refresh</button>
+      <!-- One group, so the buttons never wrap away from the count they
+           describe — "Next ›" on its own line above "1-50 of 695" reads as two
+           unrelated controls. -->
+      <span class="pager">
+        <button id="epPrev">‹ Prev</button>
+        <button id="epNext">Next ›</button>
+        <span class="sub" id="epCount"></span>
+      </span>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th title="Starred">★</th><th>Published</th><th>Podcast</th><th>Episode</th>
+          <th title="As the feed declares it">Runs</th>
+          <th>Status</th><th>Summary</th><th>Transcript</th><th>Score</th>
+        </tr></thead>
+        <tbody id="epRows"></tbody>
+      </table>
+    </div>
+    <p class="sub" style="margin:.6rem 0 0">
+      Click an episode to read its summary and re-run it. 50 per page; the podcast
+      and status filters apply to everything, the title box filters this page.
+    </p>
+  </section>
+
+
+  <section>
+    <h2>What the statuses mean</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Status</th><th>Meaning</th><th>What happens next</th></tr></thead>
+        <tbody>
+          <tr><td><span class="pill">NEW</span></td>
+              <td>Ingested from the feed, not yet judged</td>
+              <td>Triaged on the next pipeline run</td></tr>
+          <tr><td><span class="pill">TRIAGED</span></td>
+              <td>Judged; the routing decision is recorded but not yet applied</td>
+              <td>Routed to one of the three outcomes below</td></tr>
+          <tr><td><span class="pill">DROPPED</span></td>
+              <td>Confidently irrelevant — high confidence, low relevance</td>
+              <td>Nothing. Kept for the audit trail; you can force-escalate it</td></tr>
+          <tr><td><span class="pill">DIGEST_DIRECT</span></td>
+              <td>Grey zone: possibly relevant, but the description was clear
+                  enough to judge. Listed as a one-liner, never transcribed</td>
+              <td>Appears under <em>Maybe interesting</em> in the next digest</td></tr>
+          <tr><td><span class="pill">AWAITING_TRANSCRIPT</span></td>
+              <td>Queued for a transcript — either relevant, or the description
+                  was too thin to judge</td>
+              <td>Published transcript, then local transcription if the podcast allows it</td></tr>
+          <tr><td><span class="pill">TRANSCRIBED</span></td>
+              <td>Transcript stored</td>
+              <td>Summarised and scored</td></tr>
+          <tr><td><span class="pill">TRANSCRIPT_FAILED</span></td>
+              <td>No transcript could be obtained within the retry budget</td>
+              <td>Summarised from the description, labelled honestly</td></tr>
+          <tr><td><span class="pill">SUMMARIZED</span></td>
+              <td>Momentary state between scoring and classification</td>
+              <td>Sorted by score into one of the two below</td></tr>
+          <tr><td><span class="pill">READY_FOR_DIGEST</span></td>
+              <td>Scored at or above the digest threshold</td>
+              <td>A full entry in the next weekly digest</td></tr>
+          <tr><td><span class="pill">SCORED_LOW</span></td>
+              <td>Summarised but below the threshold</td>
+              <td>The collapsed audit table. The summary is kept</td></tr>
+          <tr><td><span class="pill">PUBLISHED</span></td>
+              <td>Has appeared in a digest — as a full entry <em>or</em> a
+                  one-liner, which is why some have no summary</td>
+              <td>Nothing further</td></tr>
+          <tr><td><span class="pill bad">ERROR</span></td>
+              <td>Something failed; the traceback is on the episode</td>
+              <td>Open it and retry — it resumes where it failed</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<aside id="drawer" hidden>
+  <div class="closebar">
+    <span class="pill" id="dStatus">–</span>
+    <button id="dClose">Close</button>
+  </div>
+  <h3 id="dTitle">–</h3>
+  <p class="sub" id="dMeta">–</p>
+  <div class="controls" style="margin:.8rem 0">
+    <button id="dSumAsr" class="primary">Summarise (transcribe if needed)</button>
+    <button id="dSumNoAsr">Summarise (no transcription)</button>
+  </div>
+  <div class="controls" style="margin:.8rem 0">
+    <button id="dStar">☆ Star</button>
+    <button id="dRead">Mark read</button>
+    <!-- Two directions, because they mean opposite things. "Should not have
+         been here" is a false positive; "should have been" is a false negative,
+         and nobody ever sees what they were not shown. -->
+    <button id="dWrongOver" title="Summarised, but it was not worth the space">Not worth it</button>
+    <button id="dWrongUnder" title="Downgraded or dropped, and it should not have been">Should have ranked higher</button>
+    <button id="dWrongClear" hidden>Clear the flag</button>
+  </div>
+  <p class="sub" id="dFeedback" style="margin:0 0 .8rem"></p>
+  <p class="sub" id="dHint" style="margin:0 0 .8rem"></p>
+  <div id="dBody"></div>
+</aside>
+</div>
+
+<style>
+  /* The star is a control, not text: it needs a pointer and enough room that
+     it does not shift the row when it fills in. */
+  td.starcell { cursor: pointer; text-align: center; width: 1.6rem; user-select: none; }
+  td.starcell:hover { color: var(--warn); }
+  /* Read episodes recede rather than disappear — the list is still a record of
+     what was scanned, not an inbox that empties. */
+  tr.ep.read td { opacity: .55; }
+  .flag { color: var(--warn); }
+  mark { background: var(--warn); color: #000; padding: 0 .1em; border-radius: 2px; }
+  .row.hit:hover { background: rgba(127,127,127,.12); }
+</style>
+<script>
+(() => {
+  "use strict";
+  const KEY_NAME = "podagent_key";
+  const $ = (id) => document.getElementById(id);
+
+  const key = () => sessionStorage.getItem(KEY_NAME) || "";
+
+  async function api(path, options = {}) {
+    const res = await fetch(path, {
+      ...options,
+      headers: { "X-API-Key": key(), ...(options.headers || {}) },
+    });
+    if (res.status === 401) { lock("Key rejected."); throw new Error("unauthorised"); }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const d = body.detail;
+      throw new Error(typeof d === "string" ? d : JSON.stringify(d || `HTTP ${res.status}`));
+    }
+    return body;
+  }
+
+  function say(text, kind = "ok") {
+    const el = $("msg");
+    el.textContent = text;
+    el.className = `show ${kind}`;
+    if (kind === "ok") setTimeout(() => { el.className = ""; }, 6000);
+  }
+
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+  async function post(path, label) {
+    const buttons = document.querySelectorAll("button");
+    buttons.forEach((b) => (b.disabled = true));
+    say(`${label}…`);
+    try {
+      await api(path, { method: "POST" });
+      say(`${label} started.`);
+    } catch (err) {
+      say(`${label} failed: ${err.message}`, "err");
+    } finally {
+      buttons.forEach((b) => (b.disabled = false));
+    }
+  }
+
+  // --- episode browser -----------------------------------------------------
+  const PAGE_SIZE = 50;
+  let episodes = [];
+  let selected = null;
+  let skip = 0;
+  let total = 0;
+  let truncated = false;
+
+  async function loadEpisodes() {
+    const params = new URLSearchParams({
+      limit: String(PAGE_SIZE), skip: String(skip),
+    });
+    // "min-max", or empty for no score filter. Tested on the raw value, not
+    // the parsed one: "".split("-") is [""] and Number("") is 0, so parsing
+    // first makes "Any score" indistinguishable from a floor of zero.
+    const band = $("fScore").value;
+    const [minScore, maxScore] = band ? band.split("-").map(Number) : [];
+    const show = $("fShow").value;
+    const st = $("fStatus").value;
+    if (show) params.set("podcast", show);
+    if (st) params.set("status", st);
+    if (band) {
+      params.set("min_score", String(minScore));
+      params.set("max_score", String(maxScore));
+    }
+    const signal = $("fSignal").value;
+    if (signal === "starred") params.set("starred", "true");
+    if (signal === "unread") params.set("unread", "true");
+    if (signal === "flagged") params.set("flagged", "true");
+    const summarised = $("fSummary").value;
+    if (summarised) params.set("summarised", summarised === "yes" ? "true" : "false");
+    try {
+      const body = await api(`/api/v1/episodes?${params}`);
+      episodes = body.episodes || [];
+      total = body.total ?? episodes.length;
+      truncated = Boolean(body.truncated);
+      // A filter change can leave us past the end; step back rather than
+      // showing an empty page with no explanation.
+      if (!episodes.length && skip > 0) {
+        skip = Math.max(0, skip - PAGE_SIZE);
+        return loadEpisodes();
+      }
+      renderEpisodes();
+    } catch (err) {
+      if (err.message !== "unauthorised") say(`Episode list failed: ${err.message}`, "err");
+    }
+  }
+
+  function resetPaging() {
+    skip = 0;
+    return loadEpisodes();
+  }
+
+  function renderEpisodes() {
+    const needle = $("fText").value.trim().toLowerCase();
+    const shown = needle
+      ? episodes.filter((e) => (e.title || "").toLowerCase().includes(needle))
+      : episodes;
+
+    const first = total ? skip + 1 : 0;
+    const last = skip + episodes.length;
+    const of = truncated ? `${total}+` : `${total}`;
+    $("epCount").textContent = needle
+      ? `${shown.length} matching on this page (${first}–${last} of ${of})`
+      : `${first}–${last} of ${of}`;
+    $("epPrev").disabled = skip === 0;
+    $("epNext").disabled = last >= total;
+    $("epRows").innerHTML = shown.map((e) => {
+      const t1 = e.tier1 || {};
+      const t0 = e.tier0 || {};
+      // Computed server-side, so the table, the filter and the API agree on
+      // what an episode's score is. A grey-zone episode is judged but never
+      // summarised, so its number is the triage guess, marked provisional.
+      const score = e.score == null ? "–"
+        : `${e.score_provisional ? "~" : ""}${e.score}/10`;
+      const summary = e.has_summary
+        ? `<span class="yes">yes</span><div class="basis">${
+            esc(String(t1.summary_basis || "").replace(/_/g, " "))}</div>`
+        : `<span class="no">no</span><div class="basis">${esc(whyNoSummary(e))}</div>`;
+      // The star toggles from the row: opening the drawer to star something is
+      // one click too many for the gesture it is.
+      const star = `<td class="starcell" data-star="${esc(e._id)}" title="${
+        e.starred ? "Starred — click to unstar" : "Click to star"}">${e.starred ? "★" : "☆"}</td>`;
+      const flag = e.feedback ? ` <span class="flag" title="Marked as a wrong call">⚑</span>` : "";
+      return `<tr class="ep${selected === e._id ? " sel" : ""}${
+          e.read_at ? " read" : ""}" data-id="${esc(e._id)}">
+        ${star}
+        <td>${esc((e.published_at || "").slice(0, 10) || "–")}</td>
+        <td title="${esc(e.podcast_slug)}">${esc(e.podcast_name || e.podcast_slug)}</td>
+        <td>${esc((e.title || "").slice(0, 70))}${flag}</td>
+        <td class="num">${esc(e.duration_s ? runtime(e.duration_s) : "–")}</td>
+        <td><span class="pill">${esc(e.status)}</span></td>
+        <td>${summary}</td>
+        <td>${e.has_transcript ? `<span class="yes">yes</span>` : `<span class="no">no</span>`}</td>
+        <td>${esc(score)}</td>
+      </tr>`;
+    }).join("") || `<tr><td colspan="9" class="sub">No episodes match.</td></tr>`;
+
+    document.querySelectorAll("tr.ep").forEach((row) =>
+      row.addEventListener("click", () => openEpisode(row.dataset.id)));
+    // Registered after the row handler and stops propagation, so starring does
+    // not also open the drawer.
+    document.querySelectorAll("[data-star]").forEach((cell) =>
+      cell.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        toggleStar(cell.dataset.star);
+      }));
+  }
+
+  // Why an episode has no summary. Without this, a PUBLISHED row with no
+  // summary and no transcript reads as a failure when it is the designed
+  // grey-zone path: judged, listed as a one-liner, never summarised.
+  // How long the episode runs, as the feed declares it. Minutes below an hour,
+  // because "94 min" is easier to place against an evening than "1h 34m"; hours
+  // above it, because three digits of minutes stops meaning anything.
+  function runtime(seconds) {
+    const mins = Math.round(seconds / 60);
+    if (mins < 60) return `${mins} min`;
+    return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m`;
+  }
+
+  function whyNoSummary(e) {
+    const route = (e.tier0 || {}).route;
+    // Historical intake decides some episodes are worth indexing but not
+    // summarising, and records why. That decision is taken *after* triage, so
+    // the stored route still reads ESCALATE — trusting it alone labelled 280
+    // finished archive episodes "queued", as though work were still pending.
+    if (e.indexed_only) return "indexed only — " + e.indexed_only;
+    if (route === "DIGEST_DIRECT") return "indexed only (grey zone)";
+    if (route === "DROP") return "dropped at triage";
+    if (e.status === "TRANSCRIPT_FAILED") return "no transcript available";
+    if (e.status === "ERROR") return "processing error";
+    if (!e.tier0) return "not yet triaged";
+    // Archive episodes that predate the recorded reason above. They are
+    // finished — an archive file already lists them — so anything else here
+    // would be a guess about which of the two rules applied.
+    if (String(e.digest_id || "").startsWith("archive:")) return "indexed only (archive)";
+    return "queued";
+  }
+
+  async function openEpisode(id) {
+    selected = id;
+    renderEpisodes();
+    $("drawer").hidden = false;
+    $("dBody").innerHTML = `<p class="sub">Loading…</p>`;
+    try {
+      const e = await api(`/api/v1/episodes/${encodeURIComponent(id)}`);
+      const t1 = e.tier1_full || {};
+      const t0 = e.tier0_full || {};
+      $("dTitle").textContent = e.title || "(untitled)";
+      $("dStatus").textContent = e.status;
+      $("dMeta").textContent =
+        `${e.podcast_name || e.podcast_slug} · ${(e.published_at || "").slice(0, 10)}` +
+        (e.duration_s ? ` · ${runtime(e.duration_s)}` : "") +
+        (e.transcript_source && e.transcript_source !== "none"
+          ? ` · transcript from ${e.transcript_source}` : " · no transcript");
+
+      // The claim field holds one of two things and they must not be confused:
+      // "digest:2026-W31" for a weekly digest, "archive:<slug>:2026-06" for an
+      // archive file. Splitting on ":" and taking the last part yields "2026-06"
+      // for the second, which is not a week and links nowhere real.
+      const claim = String(e.digest_id || "");
+      const week = claim.startsWith("digest:") ? claim.slice("digest:".length) : "";
+      const archive = claim.startsWith("archive:") ? claim.slice("archive:".length) : "";
+      // Only a *written summary* is protected. An episode that was listed as
+      // an index entry has nothing in any file to contradict — the file said it
+      // was not summarised, and that stays true of the file — so it can still
+      // be summarised on request. Refusing those left episodes worth reading
+      // permanently unreachable.
+      // A summary added *after* the episode was listed is not in any file, so
+      // redoing it cannot make a file disagree — only a summary the file itself
+      // carries is protected.
+      const rewriting =
+        e.status === "PUBLISHED" && e.has_summary && !e.summary_after_listing;
+      const listedOnly =
+        e.status === "PUBLISHED" && (!e.has_summary || e.summary_after_listing);
+      $("dSumAsr").disabled = rewriting;
+      $("dSumNoAsr").disabled = rewriting;
+      $("dHint").textContent = rewriting
+        ? "Already written into a digest — re-summarising would leave that file disagreeing with the database."
+        : listedOnly
+        ? "Listed without a summary. Summarising it now adds one here; the file it was listed in is not rewritten."
+        : "Without transcription, only a published transcript is used; if none exists the summary is made from the description and labelled as such.";
+
+      let html = "";
+      if (week) {
+        html += `<div class="row"><span>Published in</span><span>` +
+                `<a href="/admin/digests?week=${encodeURIComponent(week)}">${esc(week)}</a>` +
+                `</span></div>`;
+      } else if (archive) {
+        // Archive material never reaches a weekly digest; it goes to a
+        // per-podcast monthly file, which the console does not render.
+        const month = e.archive_month || archive.split(":").pop();
+        html += `<div class="row"><span>Published in</span><span>archive ${esc(month)}` +
+                `<div class="sub">per-podcast archive file, not a weekly digest</div>` +
+                `</span></div>`;
+      } else if (e.status === "PUBLISHED") {
+        // PUBLISHED with no claim at all: reachable only if a digest run died
+        // between writing the file and marking its episodes. Say so rather
+        // than rendering an empty row.
+        html += `<div class="row"><span>Published in</span>` +
+                `<span class="sub">not recorded</span></div>`;
+      }
+      if (t0.relevance_guess != null) {
+        html += `<div class="row"><span>Triage</span><span>relevance ${esc(t0.relevance_guess)}, ` +
+                `confidence ${esc(t0.confidence)} → ${esc(t0.route || "")}</span></div>`;
+      }
+      if (t1.summary_md) {
+        html += `<div class="row"><span>Score</span><span>${esc(t1.relevance_score)}/10 · ` +
+                `${esc(String(t1.summary_basis || "").replace(/_/g, " "))}</span></div>`;
+        if (t1.why_it_matters) html += `<p style="margin-top:.8rem"><strong>Why it matters:</strong> ${esc(t1.why_it_matters)}</p>`;
+        html += `<div class="summary">${esc(t1.summary_md)}</div>`;
+        if ((t1.key_takeaways || []).length) {
+          html += `<p style="margin:.9rem 0 0"><strong>Key takeaways</strong></p><ul>` +
+                  t1.key_takeaways.map((b) => `<li>${esc(b)}</li>`).join("") + `</ul>`;
+        }
+        if ((t1.entities || []).length) {
+          html += `<p class="sub" style="margin-top:.8rem">Mentioned: ${esc(t1.entities.join(", "))}</p>`;
+        }
+      } else {
+        html += `<p class="sub" style="margin-top:.8rem">No summary yet.</p>`;
+      }
+      if (e.last_error) {
+        html += `<p class="sub" style="margin-top:.8rem;color:var(--bad)">Last error (${
+          esc(e.last_error.stage)}): ${esc(e.last_error.message)}</p>`;
+      }
+      renderSignals(e);
+      $("dBody").innerHTML = html;
+    } catch (err) {
+      $("dBody").innerHTML = `<p class="sub" style="color:var(--bad)">${esc(err.message)}</p>`;
+    }
+  }
+
+  // Reader signals. Nothing here acts on the pipeline: they are recorded so a
+  // precision report can later be argued with, not so a show can be demoted
+  // behind your back.
+  function renderSignals(e) {
+    $("dStar").textContent = e.starred ? "★ Starred" : "☆ Star";
+    $("dRead").textContent = e.read_at ? "Mark unread" : "Mark read";
+    const fb = e.feedback;
+    $("dWrongClear").hidden = !fb;
+    $("dFeedback").textContent = fb
+      ? `Flagged as ${fb.verdict === "over" ? "not worth it" : "ranked too low"}` +
+        `${fb.note ? ` — ${fb.note}` : ""} (${(fb.at || "").slice(0, 10)})`
+      : "";
+  }
+
+  async function signal(path, label) {
+    if (!selected) return;
+    try {
+      await api(`/api/v1/episodes/${encodeURIComponent(selected)}/${path}`, { method: "POST" });
+      await openEpisode(selected);
+      await loadEpisodes();
+    } catch (err) {
+      say(`${label} failed: ${err.message}`, "err");
+    }
+  }
+
+  async function toggleStar(id) {
+    const current = episodes.find((e) => e._id === id);
+    try {
+      await api(`/api/v1/episodes/${encodeURIComponent(id)}/star?starred=${
+        current && current.starred ? "false" : "true"}`, { method: "POST" });
+      await loadEpisodes();
+      if (selected === id) await openEpisode(id);
+    } catch (err) {
+      say(`Star failed: ${err.message}`, "err");
+    }
+  }
+
+  async function flagWrong(verdict) {
+    if (!selected) return;
+    // Optional: a verdict on its own is already the signal, and demanding a
+    // sentence is how a one-click gesture stops being used.
+    const note = verdict ? prompt("Why? (optional)") : null;
+    if (note === null && verdict) { /* cancelled the prompt, still flag it */ }
+    try {
+      await api(`/api/v1/episodes/${encodeURIComponent(selected)}/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ verdict, note: note || null }),
+      });
+      await openEpisode(selected);
+      await loadEpisodes();
+    } catch (err) {
+      say(`Flag failed: ${err.message}`, "err");
+    }
+  }
+
+  async function summarizeSelected(allowAsr) {
+    if (!selected) return;
+    const label = allowAsr ? "Summarise (transcribe if needed)" : "Summarise (no transcription)";
+    if (allowAsr && !confirm(
+        "Allow ASR? If this episode has no published transcript it will download the "
+      + "audio and transcribe it locally, which can take a long time.")) return;
+    await post(
+      `/api/v1/episodes/${encodeURIComponent(selected)}/summarize?allow_asr=${allowAsr}`,
+      label);
+    say(`${label} started — watch the episode's status.`);
+    setTimeout(() => { loadEpisodes(); openEpisode(selected); }, 1500);
+  }
+
+
+  async function loadShows() {
+    try {
+      const body = await api("/api/v1/podcasts");
+      const picker = $("fShow");
+      // Named for the reader; the slug stays as the value the filter sends.
+      const named = (body.podcasts || [])
+        .map((p) => ({ slug: p.slug, name: p.name || p.slug }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      picker.insertAdjacentHTML("beforeend", named.map((p) =>
+        `<option value="${esc(p.slug)}">${esc(p.name)}</option>`).join(""));
+    } catch { /* filter simply stays on "All podcasts" */ }
+  }
+
+  async function unlock() {
+    const value = $("key").value.trim();
+    if (!value) return;
+    sessionStorage.setItem(KEY_NAME, value);
+    try { await api("/api/v1/episodes?limit=1"); start(); }
+    catch { sessionStorage.removeItem(KEY_NAME); $("gateErr").textContent = "That key was rejected."; }
+  }
+
+  function lock(reason) {
+    sessionStorage.removeItem(KEY_NAME);
+    $("app").hidden = true; $("gate").hidden = false;
+    $("gateErr").textContent = reason || "";
+  }
+
+  function start() {
+    $("gate").hidden = true; $("app").hidden = false;
+    loadShows();
+    loadEpisodes();
+    refreshSearchStatus();
+  }
+
+  $("epReload").addEventListener("click", loadEpisodes);
+  $("epPrev").addEventListener("click", () => { skip = Math.max(0, skip - PAGE_SIZE); loadEpisodes(); });
+  $("epNext").addEventListener("click", () => { skip += PAGE_SIZE; loadEpisodes(); });
+  $("fShow").addEventListener("change", resetPaging);
+  $("fScore").addEventListener("change", resetPaging);
+  $("fStatus").addEventListener("change", resetPaging);
+  $("fSignal").addEventListener("change", resetPaging);
+  $("fSummary").addEventListener("change", resetPaging);
+  $("fText").addEventListener("input", renderEpisodes);
+  $("dClose").addEventListener("click", () => {
+    $("drawer").hidden = true; selected = null; renderEpisodes();
+  });
+  $("dSumAsr").addEventListener("click", () => summarizeSelected(true));
+  $("dSumNoAsr").addEventListener("click", () => summarizeSelected(false));
+  $("dStar").addEventListener("click", () => toggleStar(selected));
+  $("dRead").addEventListener("click", () => {
+    const e = episodes.find((x) => x._id === selected);
+    signal(`read?read=${e && e.read_at ? "false" : "true"}`, "Mark read");
+  });
+  $("dWrongOver").addEventListener("click", () => flagWrong("over"));
+  $("dWrongUnder").addEventListener("click", () => flagWrong("under"));
+  $("dWrongClear").addEventListener("click", () => flagWrong(null));
+
+  // --- full-text search ----------------------------------------------------
+  // Separate from the filters above the table: those narrow a page of the
+  // episode list, this asks the index a question and answers with excerpts.
+  async function refreshSearchStatus() {
+    try {
+      const s = await api("/api/v1/search/status");
+      $("sStatus").textContent = s.built
+        ? `index: ${s.episodes} episodes, ${Math.round(s.bytes / 1024)} KB`
+        : "index not built yet";
+    } catch { /* the key screen handles auth; a status line is not worth a shout */ }
+  }
+
+  async function runSearch() {
+    const q = $("sQuery").value.trim();
+    if (!q) return clearSearch();
+    const params = new URLSearchParams({ q, limit: "50" });
+    const field = $("sField").value;
+    if (field) params.set("field", field);
+    $("sResults").innerHTML = `<p class="sub">Searching…</p>`;
+    try {
+      const body = await api(`/api/v1/search?${params}`);
+      renderSearch(body.results || []);
+    } catch (err) {
+      // 409 means the index does not exist yet, which is a thing to do rather
+      // than an error to report.
+      $("sResults").innerHTML = `<p class="sub" style="color:var(--warn)">${esc(err.message)}</p>`;
+    }
+  }
+
+  function renderSearch(results) {
+    if (!results.length) {
+      $("sResults").innerHTML = `<p class="sub">Nothing matched.</p>`;
+      return;
+    }
+    $("sResults").innerHTML = `<p class="sub">${esc(results.length)} match${
+      results.length === 1 ? "" : "es"}, best first.</p>` + results.map((r) => {
+      const snippet = r.summary_snippet || r.transcript_snippet || "";
+      const where = r.summary_snippet ? "summary" : "transcript";
+      return `<div class="row hit" data-id="${esc(r.episode_id)}" style="cursor:pointer">
+        <span>${esc(r.podcast_name || r.podcast_slug)}<div class="sub">${
+          esc((r.published_at || "").slice(0, 10))}</div></span>
+        <span><strong>${esc(r.title || "(untitled)")}</strong>
+          <div class="sub">${mark(snippet)}<em> — ${esc(where)}</em></div></span>
+      </div>`;
+    }).join("");
+    document.querySelectorAll(".hit").forEach((row) =>
+      row.addEventListener("click", () => openEpisode(row.dataset.id)));
+  }
+
+  // The snippet arrives with << >> around the matched terms. Escaped first,
+  // then the markers become tags — never the other way round, or the episode
+  // text would be interpreted as HTML.
+  function mark(snippet) {
+    return esc(snippet).replace(/&lt;&lt;/g, "<mark>").replace(/&gt;&gt;/g, "</mark>");
+  }
+
+  function clearSearch() {
+    $("sQuery").value = "";
+    $("sResults").innerHTML = "";
+  }
+
+  $("sGo").addEventListener("click", runSearch);
+  $("sClear").addEventListener("click", clearSearch);
+  $("sQuery").addEventListener("keydown", (e) => { if (e.key === "Enter") runSearch(); });
+  $("sRebuild").addEventListener("click", async () => {
+    $("sRebuild").disabled = true;
+    $("sStatus").textContent = "rebuilding…";
+    try {
+      const r = await api("/api/v1/search/rebuild", { method: "POST" });
+      say(`Search index rebuilt: ${r.indexed} episodes.`);
+    } catch (err) {
+      say(`Rebuild failed: ${err.message}`, "err");
+    } finally {
+      $("sRebuild").disabled = false;
+      refreshSearchStatus();
+    }
+  });
+  $("forget").addEventListener("click", () => lock("Key cleared."));
+  $("unlock").addEventListener("click", unlock);
+  $("key").addEventListener("keydown", (e) => { if (e.key === "Enter") unlock(); });
+
+  if (key()) start(); else $("gate").hidden = false;
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Operations · Digest Agent</title>
+<!--
+  Operations console (roadmap B2). Deliberately one self-contained file with no
+  external requests: this service is LAN-only and has no business fetching a CDN.
+
+  The page itself carries no data. The API key is entered once and held in
+  sessionStorage, and every request sends it as X-API-Key — so the shell can be
+  served unauthenticated while the data behind it is not.
+-->
+<style>
+  :root {
+    --bg: #fbfbfa; --panel: #fff; --ink: #1a1a18; --muted: #6b6b66;
+    --line: #e4e4e0; --accent: #2f5d50; --warn: #8a5a00; --bad: #a3352b;
+    --good: #2f6b3a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a; --panel: #1e2024; --ink: #e8e8e4; --muted: #9a9a94;
+      --line: #2e3138; --accent: #7fbfa8; --warn: #d0a24c; --bad: #e0796b;
+      --good: #7fbf8f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+    padding: 1rem 1.25rem; border-bottom: 1px solid var(--line); background: var(--panel);
+    position: sticky; top: 0; z-index: 5;
+  }
+  h1 { font-size: 1.05rem; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  a { color: var(--accent); }
+  main { padding: 1.25rem; max-width: 1100px; margin: 0 auto; display: grid; gap: 1rem; }
+  .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  section {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1rem;
+  }
+  h2 { font-size: .78rem; text-transform: uppercase; letter-spacing: .07em;
+       color: var(--muted); margin: 0 0 .75rem; font-weight: 650; }
+  .stat { font-size: 1.7rem; font-weight: 640; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); font-size: .84rem; }
+  .row { display: flex; justify-content: space-between; gap: .75rem; padding: .3rem 0;
+         border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .row span:last-child { font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-size: .87rem; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: .35rem .5rem;
+       border-bottom: 1px solid var(--line); font-size: .78rem; }
+  td { padding: .35rem .5rem; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: 0; }
+  .scroll { overflow-x: auto; }
+  button {
+    font: inherit; font-size: .88rem; padding: .45rem .85rem; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  .controls { display: flex; gap: .5rem; flex-wrap: wrap; }
+  .pill { font-size: .74rem; padding: .12rem .5rem; border-radius: 999px;
+          border: 1px solid var(--line); color: var(--muted); }
+  .pill.on { color: var(--good); border-color: currentColor; }
+  .pill.off { color: var(--warn); border-color: currentColor; }
+  .pill.bad { color: var(--bad); border-color: currentColor; }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: .4rem; }
+  .bar > div { height: 100%; background: var(--accent); }
+  pre { margin: 0; font-size: .8rem; white-space: pre-wrap; word-break: break-word;
+        color: var(--muted); max-height: 220px; overflow: auto; }
+  #msg { padding: .5rem .75rem; border-radius: 7px; font-size: .85rem; display: none; }
+  #msg.show { display: block; }
+  #msg.err { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
+  #msg.ok { background: color-mix(in srgb, var(--good) 12%, transparent); color: var(--good); }
+  #gate { padding: 2rem 1.25rem; max-width: 420px; margin: 3rem auto; }
+  .jobgrid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+  .jobgrid p { margin: .4rem 0 0; }
+  /* The answer to "has this run?" belongs beside the button that runs it. */
+  .lastrun { margin: .3rem 0 0; font-size: .78rem; color: var(--muted); }
+  .lastrun.ran { color: var(--good); }
+  .lastrun.never { color: var(--warn); }
+  .lastrun.busy { color: var(--accent); font-weight: 600; }
+  select, input[type=search] {
+    font: inherit; font-size: .88rem; padding: .4rem .55rem; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  }
+  .filters { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-bottom: .8rem; }
+  tr.ep { cursor: pointer; }
+  tr.ep:hover td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  tr.ep.sel td { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  .yes { color: var(--good); font-weight: 600; }
+  .no { color: var(--muted); }
+  .basis { font-size: .74rem; color: var(--muted); }
+  #drawer {
+    position: fixed; inset: 0 0 0 auto; width: min(640px, 100%); background: var(--panel);
+    border-left: 1px solid var(--line); padding: 1.25rem; overflow-y: auto; z-index: 20;
+    box-shadow: -12px 0 40px rgba(0,0,0,.18);
+  }
+  #drawer[hidden] { display: none; }
+  #drawer h3 { margin: .2rem 0 .3rem; font-size: 1.05rem; line-height: 1.35; }
+  #drawer .summary { white-space: pre-wrap; margin-top: .8rem; }
+  #drawer ul { margin: .4rem 0 0; padding-left: 1.1rem; }
+  .closebar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+  input[type=password] {
+    font: inherit; width: 100%; padding: .5rem .65rem; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink); margin: .5rem 0;
+  }
+</style>
+</head>
+<body>
+
+<div id="gate" hidden>
+  <h1>Operations</h1>
+  <p class="sub">Enter the admin API key (<code>PODAGENT_ADMIN_API_KEY</code>). It is
+     kept in this tab only and never stored on disk.</p>
+  <input type="password" id="key" autocomplete="current-password" placeholder="API key">
+  <button class="primary" id="unlock">Unlock</button>
+  <p class="sub" id="gateErr" style="color:var(--bad)"></p>
+</div>
+
+<div id="app" hidden>
+<!--NAV-->
+<header>
+  <h1>Operations</h1>
+  <span class="pill" id="health">checking…</span>
+  <span class="pill" id="tick"></span>
+  <span style="flex:1"></span>
+  <button id="forget">Forget key</button>
+</header>
+
+<main>
+  <div id="msg"></div>
+
+  <div class="grid">
+    <section>
+      <h2>Queue</h2>
+      <div class="stat" id="qTotal">–</div>
+      <div class="sub">episodes awaiting work</div>
+        <div class="sub" id="qSplit" style="margin-top:.35rem"></div>
+      <div style="margin-top:.7rem" id="queues"></div>
+    </section>
+    <section>
+      <h2>Ready for the next digest</h2>
+      <div class="stat" id="qReady">–</div>
+      <div class="sub" id="lastDigest">–</div>
+    </section>
+    <section>
+      <h2>Interest profile</h2>
+      <div class="stat" id="profileStale">–</div>
+      <div class="sub">episodes scored on an older profile</div>
+      <div class="sub" style="margin-top:.35rem">version <code id="profileVer">–</code></div>
+    </section>
+  </div>
+
+  <section>
+    <h2>Scheduled jobs — run one now</h2>
+    <p class="sub" style="margin:-.35rem 0 .7rem">
+      These are the same four jobs the scheduler fires on its own (feeds every 6h,
+      queue every 30min, digest Friday 06:00, retention nightly). Use them to run
+      one immediately rather than waiting. Under each button is when it last
+      ran — read from stored run history, so it survives a restart.
+    </p>
+    <div class="jobgrid">
+      <div>
+        <button data-run="ingest">Poll feeds</button>
+        <div class="lastrun" data-lastrun="ingest">–</div>
+        <p class="sub">Fetches every enabled podcast's RSS and records any new
+           episodes. Cheap — conditional requests, no LLM. Normally every 6 h.</p>
+      </div>
+      <div>
+        <button data-run="pipeline">Process queue</button>
+        <div class="lastrun" data-lastrun="pipeline">–</div>
+        <p class="sub">Moves <em>recent</em> episodes one step: triage, transcripts,
+           summaries. Archive episodes are not touched — those move only when
+           <a href="/admin/backfill">historical intake</a> runs. This is where
+           model time is spent. Normally every 30 min.</p>
+      </div>
+      <div>
+        <button data-run="digest-dry">Digest (dry run)</button>
+        <div class="lastrun sub">not recorded — a dry run changes nothing</div>
+        <p class="sub">Renders the digest and reports what it would contain,
+           writing nothing and claiming no episodes. Safe to run any time.</p>
+      </div>
+      <div>
+        <button data-run="digest">Generate digest</button>
+        <div class="lastrun" data-lastrun="digest">–</div>
+        <p class="sub">Writes the digest file and marks its episodes published.
+           Re-running writes <code>-r2</code>; the original is never overwritten.
+           Normally Friday 06:00.</p>
+      </div>
+      <div>
+        <button data-run="retention">Retention cleanup</button>
+        <div class="lastrun" data-lastrun="retention">–</div>
+        <p class="sub">Expires transcripts past their retention window and old
+           telemetry, and sweeps leftover audio. Episodes and summaries are never
+           deleted. Normally nightly at 04:00.</p>
+      </div>
+      <div>
+        <button data-run="rescore">Re-score stale</button>
+        <div class="lastrun" data-lastrun="rescore">–</div>
+        <p class="sub">Re-scores episodes that were judged under an older interest
+           profile, reusing stored transcripts. Nothing is transcribed again.</p>
+      </div>
+    </div>
+    <div style="margin-top:.8rem" id="lastRuns"></div>
+  </section>
+
+  <div class="grid">
+    <section>
+      <h2>Feed health</h2>
+      <div class="stat" id="feedHealth">–</div>
+      <div class="sub" id="feedHealthDetail">–</div>
+      <div class="controls" style="margin-top:.6rem">
+        <a href="/admin/podcasts"><button>Manage podcasts</button></a>
+      </div>
+    </section>
+    <section>
+      <h2>LLM cost, 30 days</h2>
+      <div class="stat" id="costTotal">–</div>
+      <div class="sub" id="costCalls">–</div>
+      <div style="margin-top:.7rem" id="costRows"></div>
+    </section>
+  </div>
+
+  <section>
+    <h2>Last response</h2>
+    <pre id="raw">–</pre>
+  </section>
+</main>
+
+
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const KEY_NAME = "podagent_key";
+  const $ = (id) => document.getElementById(id);
+  let timer = null;
+
+  const key = () => sessionStorage.getItem(KEY_NAME) || "";
+
+  async function api(path, options = {}) {
+    const res = await fetch(path, {
+      ...options,
+      headers: { "X-API-Key": key(), ...(options.headers || {}) },
+    });
+    if (res.status === 401) { lock("Key rejected."); throw new Error("unauthorised"); }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.detail ? JSON.stringify(body.detail) : `HTTP ${res.status}`);
+    return body;
+  }
+
+  function say(text, kind = "ok") {
+    const el = $("msg");
+    el.textContent = text;
+    el.className = `show ${kind}`;
+    if (kind === "ok") setTimeout(() => { el.className = ""; }, 6000);
+  }
+
+  const num = (v) => (v === null || v === undefined ? "–" : v);
+  const when = (iso) => {
+    if (!iso) return "never";
+    const secs = (Date.now() - Date.parse(iso)) / 1000;
+    if (Number.isNaN(secs)) return iso;
+    if (secs < 60) return "just now";
+    if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+    if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
+    return `${Math.floor(secs / 86400)}d ago`;
+  };
+
+  // `valueHtml` is markup the caller assembled and is responsible for; the
+  // label is escaped here. Every caller today passes a fixed label, but a
+  // helper that interpolates both sides raw is one careless call away from
+  // putting a podcast title into the page unescaped.
+  function rows(target, pairs) {
+    $(target).innerHTML = pairs
+      .map(([label, valueHtml]) =>
+        `<div class="row"><span>${esc(label)}</span><span>${valueHtml}</span></div>`)
+      .join("");
+  }
+
+  function renderStatus(s) {
+    const q = s.queue_depths || {};
+    const r = s.queue_depths_routine || {};
+    const sum = (d) => (d.triage || 0) + (d.dispatch || 0) + (d.transcripts || 0) + (d.summarize || 0);
+    const total = sum(q);
+    const archive = total - sum(r);
+    $("qTotal").textContent = total;
+
+    // Two jobs move these and each ignores the other's half. Showing one number
+    // made a queue of archive episodes look like a stalled pipeline: "Process
+    // queue" leaves them untouched, correctly, and says nothing about why.
+    rows("queues", [
+      ["Triage", q.triage, r.triage], ["Routing", q.dispatch, r.dispatch],
+      ["Transcripts", q.transcripts, r.transcripts], ["Summarise", q.summarize, r.summarize],
+    ].map(([k, all, routine]) => [
+      k,
+      (all || 0) === (routine || 0)
+        ? num(all)
+        : `${num(routine)} <span class="sub">+ ${num((all || 0) - (routine || 0))} archive</span>`,
+    ]));
+    // "Awaiting work" implies progress. While historical intake is paused these
+    // are not queued, they are frozen: the only thing that advances an archive
+    // episode is a backfill run, and pausing stops the round that would.
+    const paused = ((s.backfill || {}).control || {}).paused !== false;
+    $("qSplit").innerHTML = !archive ? ""
+      : paused
+      ? `<strong>${num(archive)}</strong> are archive episodes and
+         <a href="/admin/backfill">historical intake is paused</a>, so they are not
+         progressing at all — pausing stops processing what is already ingested,
+         not just reaching further back.`
+      : `<strong>${num(archive)}</strong> of these are archive episodes, moved by
+         <a href="/admin/backfill">historical intake</a> — not by Process queue.`;
+
+    $("qReady").textContent = num(q.awaiting_digest);
+    const digest = (s.last_runs || {}).digest;
+    $("lastDigest").textContent = digest ? `last digest ${when(digest.at)}` : "no digest yet";
+
+    const profile = s.interest_profile || {};
+    $("profileStale").textContent = num(profile.stale_episodes);
+    $("profileVer").textContent = profile.version || "–";
+
+    // Feed detail lives on the Podcasts page; this is only the "is anything
+    // broken?" signal, so a problem is still visible from the operations view.
+    const feeds = s.feeds || [];
+    const broken = feeds.filter((f) => f.circuit_open);
+    const failing = feeds.filter((f) => !f.circuit_open && f.consecutive_failures);
+    $("feedHealth").textContent = broken.length
+      ? `${broken.length} down` : failing.length ? `${failing.length} failing` : "All ok";
+    $("feedHealth").style.color = broken.length
+      ? "var(--bad)" : failing.length ? "var(--warn)" : "var(--good)";
+    $("feedHealthDetail").textContent = broken.length
+      ? `circuit open: ${broken.map((f) => f.slug).join(", ")}`
+      : failing.length
+      ? `retrying: ${failing.map((f) => f.slug).join(", ")}`
+      : `${feeds.length} podcasts polling cleanly`;
+
+    const runs = s.last_runs || {};
+    $("lastRuns").innerHTML = Object.keys(runs).length
+      ? `<p class="sub">This process has run: ${
+          Object.entries(runs).map(([job, r]) =>
+            `${esc(job)} (${Math.round((r.wall_ms || 0) / 1000)}s)`).join(", ")
+        }. <a href="/admin/logs">Full history and logs →</a></p>`
+      : `<p class="sub">Nothing has run since this process started.
+          <a href="/admin/logs">Full history and logs →</a></p>`;
+
+    $("tick").textContent = `updated ${new Date().toLocaleTimeString()}`;
+  }
+
+  function esc(v) {
+    return String(v ?? "").replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  }
+
+  function renderCosts(c) {
+    const t = c.totals || {};
+    $("costTotal").textContent = `$${(t.cost_usd || 0).toFixed(4)}`;
+    $("costCalls").textContent = `${num(t.calls)} calls · ${num(t.fallbacks)} fell back to cloud`;
+    const providers = c.by_provider || {};
+    $("costRows").innerHTML = Object.entries(providers).map(([name, v]) =>
+      `<div class="row"><span>${esc(name)}</span><span>${esc(v.calls)} calls · $${
+        (v.cost_usd || 0).toFixed(4)}</span></div>`).join("") || `<p class="sub">No calls yet.</p>`;
+  }
+
+  function renderLastRuns(payload) {
+    const jobs = payload.jobs || {};
+    document.querySelectorAll("[data-lastrun]").forEach((el) => {
+      const job = jobs[el.dataset.lastrun];
+      if (!job) { el.textContent = "–"; el.className = "lastrun"; return; }
+      if (job.running) {
+        el.textContent = "running now";
+        el.className = "lastrun busy";
+        return;
+      }
+      if (!job.at) {
+        el.textContent = "never run";
+        el.className = "lastrun never";
+        return;
+      }
+      const secs = Math.round((job.summary || {}).wall_ms / 1000) || 0;
+      el.textContent = `last run ${when(job.at)}${secs ? ` · took ${secs}s` : ""}`;
+      el.title = new Date(job.at).toLocaleString();
+      el.className = "lastrun ran";
+    });
+  }
+
+  async function refresh() {
+    try {
+      const health = await fetch("/healthz").then((r) => r.json()).catch(() => null);
+      const body = health && health.detail ? health.detail : health;
+      $("health").textContent = body ? `${body.couchdb} · scheduler ${body.scheduler}` : "unreachable";
+      $("health").className = `pill ${body && body.couchdb === "ok" ? "on" : "bad"}`;
+
+      renderStatus(await api("/api/v1/status"));
+      renderLastRuns(await api("/api/v1/runs/last"));
+      renderCosts(await api("/api/v1/telemetry/costs?days=30"));
+    } catch (err) {
+      if (err.message !== "unauthorised") say(`Refresh failed: ${err.message}`, "err");
+    }
+  }
+
+  async function post(path, label) {
+    const buttons = document.querySelectorAll("button");
+    buttons.forEach((b) => (b.disabled = true));
+    say(`${label}…`);
+    try {
+      const body = await api(path, { method: "POST" });
+      $("raw").textContent = JSON.stringify(body, null, 2);
+      say(`${label} finished.`);
+    } catch (err) {
+      $("raw").textContent = String(err.message);
+      say(`${label} failed: ${err.message}`, "err");
+    } finally {
+      buttons.forEach((b) => (b.disabled = false));
+      refresh();
+    }
+  }
+
+  const ACTIONS = {
+    ingest: ["/api/v1/runs/ingest", "Feed poll"],
+    pipeline: ["/api/v1/runs/pipeline", "Pipeline run"],
+    digest: ["/api/v1/runs/digest", "Digest"],
+    "digest-dry": ["/api/v1/runs/digest?dry_run=true", "Digest dry run"],
+    retention: ["/api/v1/runs/retention", "Retention cleanup"],
+    rescore: ["/api/v1/runs/rescore?limit=50", "Re-score"],
+  };
+
+  function wire() {
+    document.querySelectorAll("[data-run]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const [path, label] = ACTIONS[btn.dataset.run];
+        if (btn.dataset.run === "backfill-once" &&
+            !confirm("Run one archive window now? This uses the local LLM for a while.")) return;
+        post(path, label);
+      });
+    });
+    $("forget").addEventListener("click", () => lock("Key cleared."));
+    $("unlock").addEventListener("click", unlock);
+    $("key").addEventListener("keydown", (e) => { if (e.key === "Enter") unlock(); });
+  }
+
+  async function unlock() {
+    const value = $("key").value.trim();
+    if (!value) return;
+    sessionStorage.setItem(KEY_NAME, value);
+    try {
+      await api("/api/v1/status");
+      start();
+    } catch {
+      sessionStorage.removeItem(KEY_NAME);
+      $("gateErr").textContent = "That key was rejected.";
+    }
+  }
+
+  function lock(reason) {
+    sessionStorage.removeItem(KEY_NAME);
+    if (timer) { clearInterval(timer); timer = null; }
+    $("app").hidden = true;
+    $("gate").hidden = false;
+    $("gateErr").textContent = reason || "";
+  }
+
+  function start() {
+    $("gate").hidden = true;
+    $("app").hidden = false;
+    refresh();
+    if (!timer) timer = setInterval(refresh, 5000);
+  }
+
+  wire();
+  if (key()) start(); else $("gate").hidden = false;
+})();
+</script>
+</body>
+</html>

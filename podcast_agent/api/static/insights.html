@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Insights · Digest Agent</title>
+<!--
+  Two questions this page exists to answer, and they are different in kind.
+
+  "Is the profile still right?" is about *you* — built from what you starred,
+  read and flagged. Every finding is a suggestion with its numbers, for you to
+  apply by hand. Nothing on this page changes configuration, because a system
+  that demotes a podcast on its own stops showing you things and you never find out.
+
+  "What does the corpus keep talking about?" is about the *material* — counted
+  from the entities Tier-1 already extracted. No model runs to build it.
+-->
+<style>
+  :root {
+    --bg: #fbfbfa; --panel: #fff; --ink: #1a1a18; --muted: #6b6b66;
+    --line: #e4e4e0; --accent: #2f5d50; --warn: #8a5a00; --bad: #a3352b; --good: #2f6b3a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a; --panel: #1e2024; --ink: #e8e8e4; --muted: #9a9a94;
+      --line: #2e3138; --accent: #7fbfa8; --warn: #d0a24c; --bad: #e0796b; --good: #7fbf8f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+           padding: 1rem 1.25rem; border-bottom: 1px solid var(--line);
+           background: var(--panel); position: sticky; top: 0; z-index: 5; }
+  h1 { font-size: 1.05rem; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  a { color: var(--accent); }
+  main { padding: 1.25rem; max-width: 1180px; margin: 0 auto; display: grid; gap: 1rem; }
+  section { background: var(--panel); border: 1px solid var(--line);
+            border-radius: 10px; padding: 1rem; }
+  h2 { font-size: .78rem; text-transform: uppercase; letter-spacing: .07em;
+       color: var(--muted); margin: 0 0 .75rem; font-weight: 650; }
+  table { width: 100%; border-collapse: collapse; font-size: .87rem; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: .4rem .5rem;
+       border-bottom: 1px solid var(--line); font-size: .78rem; white-space: nowrap; }
+  td { padding: .45rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .scroll { overflow-x: auto; }
+  button { font: inherit; font-size: .85rem; padding: .35rem .7rem; border-radius: 7px;
+           border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+           cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  select, input { font: inherit; font-size: .85rem; padding: .35rem .5rem; border-radius: 7px;
+                  border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  input[type=password] { width: 100%; margin: .5rem 0; }
+  .pill { font-size: .72rem; padding: .1rem .45rem; border-radius: 999px;
+          border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .sub { color: var(--muted); font-size: .82rem; }
+  .filters { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center;
+             margin-bottom: .75rem; }
+  #msg { padding: .5rem .75rem; border-radius: 7px; font-size: .85rem; display: none; }
+  #msg.show { display: block; }
+  #msg.err { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
+  #msg.ok { background: color-mix(in srgb, var(--good) 12%, transparent); color: var(--good); }
+  #gate { padding: 2rem 1.25rem; max-width: 420px; margin: 3rem auto; }
+
+  /* A suggestion is an argument, so it is laid out as one: the claim, the
+     evidence, and how sure to be — never a bare instruction. */
+  .sugg { border: 1px solid var(--line); border-left: 3px solid var(--muted);
+          border-radius: 8px; padding: .6rem .75rem; margin-bottom: .5rem; }
+  .sugg.strong { border-left-color: var(--accent); }
+  .sugg.weak { border-left-color: var(--warn); }
+  .sugg code { background: color-mix(in srgb, var(--ink) 8%, transparent);
+               padding: .1rem .35rem; border-radius: 4px; font-size: .85em; }
+  .caveat { border: 1px dashed var(--line); border-radius: 8px; padding: .6rem .75rem;
+            color: var(--muted); font-size: .84rem; }
+  /* Enough to read the shape of a story without a charting library. */
+  .spark { display: inline-flex; align-items: flex-end; gap: 1px; height: 1.1rem; }
+  .spark i { width: 4px; background: var(--accent); display: block; border-radius: 1px; }
+  .thin { opacity: .5; }
+</style>
+</head>
+<body>
+
+<div id="gate" hidden>
+  <h1>Insights</h1>
+  <p class="sub">Enter the admin API key. Kept in this tab only.</p>
+  <input type="password" id="key" placeholder="API key">
+  <button class="primary" id="unlock">Unlock</button>
+  <p class="sub" id="gateErr" style="color:var(--bad)"></p>
+</div>
+
+<div id="app" hidden>
+<!--NAV-->
+<header>
+  <h1>Insights</h1>
+  <span class="pill" id="summary"></span>
+  <span style="flex:1"></span>
+  <button id="reload">Refresh</button>
+  <button id="forget">Forget key</button>
+</header>
+
+<main>
+  <div id="msg"></div>
+
+  <section>
+    <h2>Is the profile still right?</h2>
+    <div class="filters">
+      <label class="sub">Over the last
+        <select id="days">
+          <option value="30">30 days</option>
+          <option value="90" selected>90 days</option>
+          <option value="180">180 days</option>
+          <option value="365">a year</option>
+          <option value="3650">everything</option>
+        </select>
+      </label>
+      <span class="sub" id="totals"></span>
+      <!-- Marks made outside the window. Without this, starring four episodes
+           and seeing one counted looks like the report is broken. -->
+      <span class="sub" id="outside"></span>
+    </div>
+    <div id="suggestions"></div>
+    <p class="caveat" id="caveat"></p>
+    <p class="sub" style="margin-top:.8rem">
+      Marks made here are written into the vault weekly, one file per period
+      under <code>signals/</code>, holding what was marked since the last one.
+    </p>
+  </section>
+
+  <section>
+    <h2>By podcast</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>Podcast</th><th>Priority</th><th class="num">Surfaced</th><th class="num">Starred</th>
+          <th class="num">Read</th><th class="num">Not worth it</th>
+          <th class="num">Ranked too low</th><th class="num">Starred share</th>
+        </tr></thead>
+        <tbody id="showRows"></tbody>
+      </table>
+    </div>
+    <p class="sub" style="margin:.6rem 0 0">
+      Greyed rows have too few surfaced episodes to judge, so they get no
+      suggestion and no share.
+    </p>
+  </section>
+
+  <section>
+    <h2>By interest</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>Interest</th><th class="num">Weight</th><th class="num">Surfaced</th>
+          <th class="num">Starred</th><th class="num">Not worth it</th>
+          <th class="num">Ranked too low</th><th class="num">Starred share</th>
+        </tr></thead>
+        <tbody id="interestRows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Worth writing about</h2>
+    <div class="filters">
+      <button id="seedBuild" class="primary">Find angles</button>
+      <span class="sub" id="seedState"></span>
+    </div>
+    <div id="seedList"></div>
+    <p class="sub" style="margin:.6rem 0 0">
+      Suggested openings for something of your own, drawn from episodes you have
+      already read. Off until <code>content.enabled</code> is set and
+      <code>content.interests</code> names the topics you actually write about —
+      the output is only useful while it is short enough to read every line.
+      Writes <code>content-seeds.md</code> beside the digests, never overwriting
+      an earlier one.
+    </p>
+  </section>
+
+  <section>
+    <h2>What the corpus keeps talking about</h2>
+    <div class="filters">
+      <label class="sub">Window
+        <select id="entDays">
+          <option value="0" selected>everything</option>
+          <option value="90">90 days</option>
+          <option value="365">a year</option>
+          <option value="3650">everything</option>
+        </select>
+      </label>
+      <label class="sub">Mentioned at least
+        <select id="entMin">
+          <option value="2" selected>twice</option>
+          <option value="3">3 times</option>
+          <option value="5">5 times</option>
+        </select>
+      </label>
+      <button id="entNotes">Write Obsidian notes</button>
+      <span class="sub" id="entCount"></span>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>Entity</th><th class="num">Episodes</th><th class="num">Podcasts</th>
+          <th>Shape</th><th>First seen</th><th>Last seen</th>
+        </tr></thead>
+        <tbody id="entRows"></tbody>
+      </table>
+    </div>
+    <p class="sub" style="margin:.6rem 0 0">
+      Counted from the named things the summary pass already extracted — no model
+      runs to build this. Notes are written to <code>entities/</code> beside the digests, one
+      per entity, rewritten in full each time.
+    </p>
+  </section>
+</main>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const KEY_NAME = "podagent_key";
+  const $ = (id) => document.getElementById(id);
+
+  const key = () => sessionStorage.getItem(KEY_NAME) || "";
+
+  async function api(path, options = {}) {
+    const res = await fetch(path, {
+      ...options,
+      headers: {
+        "X-API-Key": key(),
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...(options.headers || {}),
+      },
+    });
+    if (res.status === 401) { lock("Key rejected."); throw new Error("unauthorised"); }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const d = body.detail;
+      throw new Error(typeof d === "string" ? d : JSON.stringify(d || `HTTP ${res.status}`));
+    }
+    return body;
+  }
+
+  function say(text, kind = "ok") {
+    const el = $("msg");
+    el.textContent = text;
+    el.className = `show ${kind}`;
+    if (kind === "ok") setTimeout(() => { el.className = ""; }, 6000);
+  }
+
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+  // "—" rather than "0%" when there is not enough to judge. A share computed
+  // from three episodes is a number that looks like evidence and is not.
+  const share = (row) => row.precision == null ? "—" : `${Math.round(row.precision * 100)}%`;
+
+  // --- precision report ----------------------------------------------------
+
+  async function loadPrecision() {
+    try {
+      const body = await api(`/api/v1/insights/precision?days=${$("days").value}`);
+      renderPrecision(body);
+    } catch (err) {
+      if (err.message !== "unauthorised") say(`Report failed: ${err.message}`, "err");
+    }
+  }
+
+  function renderPrecision(r) {
+    const t = r.totals;
+    $("summary").textContent = `${t.surfaced} surfaced · ${t.starred} starred`;
+    $("totals").textContent =
+      `${t.surfaced} episodes surfaced, ${t.starred} starred, ${t.read} read, ` +
+      `${t.flagged_over} marked not worth it, ${t.flagged_under} marked ranked too low.`;
+    // Marks the window excludes. A reader who starred four episodes and sees
+    // one counted needs to be told which of the two is happening.
+    const out = r.outside_window || {};
+    const missed = [];
+    if (out.starred) missed.push(`${out.starred} starred`);
+    if (out.flagged) missed.push(`${out.flagged} flagged`);
+    $("outside").textContent = missed.length
+      ? `${missed.join(" and ")} outside this window — widen it to include them.`
+      : "";
+    $("caveat").textContent = r.caveat;
+
+    $("suggestions").innerHTML = r.suggestions.length
+      ? r.suggestions.map((s) => {
+          // The confidence word drives the colour, so a weak finding never
+          // looks like a strong one at a glance.
+          const strength = s.confidence.startsWith("strong") ? "strong"
+            : s.confidence.startsWith("weak") ? "weak" : "";
+          return `<div class="sugg ${strength}">
+            <strong>${esc(s.target)}</strong> — ${esc(s.why)}
+            <div style="margin-top:.3rem">Suggested: <code>${esc(s.change)}</code></div>
+            <div class="sub" style="margin-top:.2rem">${esc(s.confidence)}</div>
+          </div>`;
+        }).join("")
+      : `<p class="sub">Nothing to suggest yet. Star what you find useful and flag
+         what triage got wrong, and this fills in.</p>`;
+
+    $("showRows").innerHTML = r.shows.map((s) => `
+      <tr class="${s.enough_to_judge ? "" : "thin"}">
+        <td>${esc(s.label)}</td>
+        <td><span class="pill">${esc(s.priority || "—")}</span></td>
+        <td class="num">${esc(s.surfaced)}</td><td class="num">${esc(s.starred)}</td>
+        <td class="num">${esc(s.read)}</td><td class="num">${esc(s.flagged_over)}</td>
+        <td class="num">${esc(s.flagged_under)}</td><td class="num">${share(s)}</td>
+      </tr>`).join("") || `<tr><td colspan="8" class="sub">Nothing surfaced yet.</td></tr>`;
+
+    $("interestRows").innerHTML = r.interests.map((i) => `
+      <tr class="${i.enough_to_judge ? "" : "thin"}">
+        <td>${esc(i.label)}</td><td class="num">${esc(i.weight)}</td>
+        <td class="num">${esc(i.surfaced)}</td><td class="num">${esc(i.starred)}</td>
+        <td class="num">${esc(i.flagged_over)}</td><td class="num">${esc(i.flagged_under)}</td>
+        <td class="num">${share(i)}</td>
+      </tr>`).join("") || `<tr><td colspan="7" class="sub">No interests matched yet.</td></tr>`;
+  }
+
+  // --- entities ------------------------------------------------------------
+
+  async function loadEntities() {
+    const params = new URLSearchParams({
+      days: $("entDays").value, min_mentions: $("entMin").value, limit: "150",
+    });
+    try {
+      const body = await api(`/api/v1/entities?${params}`);
+      $("entCount").textContent = `${body.total} tracked`;
+      $("entRows").innerHTML = body.entities.map((e) => `
+        <tr>
+          <td><a href="/admin/episodes?q=${encodeURIComponent(e.name)}">${esc(e.name)}</a>
+            <div class="sub">${esc(e.shows.slice(0, 3).join(", "))}${
+              e.shows.length > 3 ? ` +${esc(e.shows.length - 3)}` : ""}</div></td>
+          <td class="num">${esc(e.mentions)}</td><td class="num">${esc(e.show_count)}</td>
+          <td>${spark(e)}</td>
+          <td>${esc(e.first_seen)}</td><td>${esc(e.last_seen)}</td>
+        </tr>`).join("") || `<tr><td colspan="6" class="sub">Nothing mentioned that often yet.</td></tr>`;
+    } catch (err) {
+      if (err.message !== "unauthorised") say(`Entities failed: ${err.message}`, "err");
+    }
+  }
+
+  // A bar per month between first and last seen. Whether a thing is building or
+  // fading is the question the list is being read for, and a pair of dates does
+  // not answer it.
+  function spark(e) {
+    const from = new Date(`${e.first_seen || e.last_seen}T00:00:00Z`);
+    const to = new Date(`${e.last_seen || e.first_seen}T00:00:00Z`);
+    if (Number.isNaN(from) || Number.isNaN(to)) return "";
+    const months = Math.max(1, Math.min(24,
+      (to.getUTCFullYear() - from.getUTCFullYear()) * 12 + to.getUTCMonth() - from.getUTCMonth() + 1));
+    // Without per-month counts in the list response, the bar is a span
+    // indicator rather than a histogram — deliberately flat, so it cannot be
+    // misread as data it does not have.
+    return `<span class="spark" title="${months} month${months === 1 ? "" : "s"} between first and last mention">` +
+      Array.from({ length: months }, () => `<i style="height:60%"></i>`).join("") + "</span>";
+  }
+
+  async function writeNotes() {
+    $("entNotes").disabled = true;
+    try {
+      const params = new URLSearchParams({
+        days: $("entDays").value, min_mentions: $("entMin").value,
+      });
+      const r = await api(`/api/v1/entities/notes?${params}`, { method: "POST" });
+      say(`Wrote ${r.written} entity note${r.written === 1 ? "" : "s"} to entities/.`);
+    } catch (err) {
+      say(`Writing notes failed: ${err.message}`, "err");
+    } finally {
+      $("entNotes").disabled = false;
+    }
+  }
+
+  // --- content seeds -------------------------------------------------------
+  // The preview costs nothing, so it loads with the page; generating is a
+  // model call and stays behind a button.
+  async function loadSeeds() {
+    try {
+      const body = await api("/api/v1/content/seeds");
+      $("seedBuild").disabled = !body.enabled;
+      $("seedState").textContent = body.enabled
+        ? `${body.count} episode${body.count === 1 ? "" : "s"} qualify — ` +
+          `${body.min_score}+ over ${body.window_days} days` +
+          (body.interests.length ? ` on ${body.interests.join(", ")}` : ", any interest")
+        : "switched off in settings";
+      $("seedList").innerHTML = body.count
+        ? `<div class="sub">${body.episodes.slice(0, 10).map((e) =>
+            `${esc(e.podcast_name)} — ${esc(e.title)} <span class="pill">${esc(e.score)}/10</span>`
+          ).join("<br>")}${body.count > 10 ? `<br>…and ${esc(body.count - 10)} more` : ""}</div>`
+        : `<p class="sub">Nothing qualifies yet. Widen the window, lower the score,
+           or add interests.</p>`;
+    } catch (err) {
+      if (err.message !== "unauthorised") $("seedState").textContent = err.message;
+    }
+  }
+
+  async function buildSeeds() {
+    $("seedBuild").disabled = true;
+    $("seedState").textContent = "asking…";
+    try {
+      const r = await api("/api/v1/content/seeds", { method: "POST" });
+      say(`Wrote ${r.seeds} angle${r.seeds === 1 ? "" : "s"} and ${r.threads} thread${
+        r.threads === 1 ? "" : "s"} to ${r.file_path}.`);
+    } catch (err) {
+      say(`No seeds written: ${err.message}`, "err");
+    } finally {
+      loadSeeds();
+    }
+  }
+
+  function load() { loadPrecision(); loadEntities(); loadSeeds(); }
+
+  async function unlock() {
+    const value = $("key").value.trim();
+    if (!value) return;
+    sessionStorage.setItem(KEY_NAME, value);
+    try { await api("/api/v1/status"); start(); }
+    catch { /* api() locks and reports */ }
+  }
+
+  function lock(reason) {
+    sessionStorage.removeItem(KEY_NAME);
+    $("app").hidden = true; $("gate").hidden = false;
+    $("gateErr").textContent = reason || "";
+  }
+
+  function start() { $("gate").hidden = true; $("app").hidden = false; load(); }
+
+  $("unlock").addEventListener("click", unlock);
+  $("key").addEventListener("keydown", (e) => { if (e.key === "Enter") unlock(); });
+  $("reload").addEventListener("click", load);
+  $("forget").addEventListener("click", () => lock("Key cleared."));
+  $("days").addEventListener("change", loadPrecision);
+  $("entDays").addEventListener("change", loadEntities);
+  $("entMin").addEventListener("change", loadEntities);
+  $("entNotes").addEventListener("click", writeNotes);
+  $("seedBuild").addEventListener("click", buildSeeds);
+
+  if (key()) start(); else $("gate").hidden = false;
+})();
+</script>
+</body>
+</html>

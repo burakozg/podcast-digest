@@ -1,0 +1,151 @@
+# Podcast Digest Agent — self-hosted stack (§3).
+#
+# Network layout (§10.2), and the one property it exists to protect:
+#   * podcast-agent publishes 8080 on the host, so the console is at
+#     http://<host>:8080/admin.
+#   * couchdb-podcast has NO published port and sits on the internal network
+#     only — unreachable from the LAN. That is the whole point of the layout:
+#     whoever can write to that database can change where model work is sent.
+#
+# Plain bridge networking rather than macvlan, so this file runs unchanged on a
+# NAS, a server, and Docker Desktop. macvlan bought the agent its own LAN IP and
+# nothing in the system needs one; it cost a second, divergent way to deploy.
+#
+# The QNAP deployment does give the agent a LAN address again, but as an opt-in
+# overlay (docker-compose.nas.yml) rather than a change here — so this file stays
+# the portable one. CouchDB gets no LAN address under either. See DEPLOY-NAS.md.
+#
+# This service has no TLS and no authentication beyond a shared API key. It is
+# built for a trusted LAN. DO NOT PORT-FORWARD IT. See README "Security posture".
+
+name: podcast-digest
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  podcast-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: podcast-agent:1.0.0
+    container_name: podcast-agent
+    restart: unless-stopped
+    depends_on:
+      couchdb-podcast:
+        condition: service_healthy
+    environment:
+      PODAGENT_CONFIG_FILE: /config/config.yaml
+      PODAGENT_ADMIN_API_KEY: ${PODAGENT_ADMIN_API_KEY:?set PODAGENT_ADMIN_API_KEY in .env}
+      PODAGENT_COUCHDB_PASSWORD: ${COUCHDB_PASSWORD:?set COUCHDB_PASSWORD in .env}
+      # Both required by the shipped config.yaml (OpenRouter primary, Anthropic
+      # fallback). Left unset the container exits at startup with a config error
+      # naming the tier, which is the intended failure — see config.yaml `llm:`.
+      PODAGENT_OPENROUTER_API_KEY: ${PODAGENT_OPENROUTER_API_KEY:-}
+      PODAGENT_ANTHROPIC_API_KEY: ${PODAGENT_ANTHROPIC_API_KEY:-}
+      PODAGENT_COUCHDB__URL: http://couchdb-podcast:5984
+      # Threads are capped so ASR cannot starve the rest of the NAS.
+      OMP_NUM_THREADS: "4"
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      # Point this at your synced Obsidian vault folder.
+      - ${DIGEST_DIR:-./data/digests}:/data/digests
+      # Audio scratch + Whisper model cache. Local disk, not the synced folder.
+      - podcast-work:/data/work
+    ports:
+      # Host-published. Bind to one interface — "127.0.0.1:8080:8080", or a
+      # specific LAN address — if this machine has any interface you would
+      # rather it did not answer on.
+      - "${AGENT_BIND:-8080}:8080"
+    networks:
+      - internal
+    # Read-only root filesystem: everything writable is an explicit mount (§10.2).
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          # ASR is the memory hog. large-v3-turbo at int8 needs ~2 GB; the rest of
+          # the pipeline is small. Lower this and ASR will be OOM-killed.
+          memory: 4G
+          cpus: "4.0"
+        reservations:
+          memory: 512M
+    logging: *default-logging
+
+  couchdb-podcast:
+    # Dedicated instance for this service — deliberately NOT the tasting-log
+    # CouchDB (v1 decision).
+    image: couchdb:3@sha256:7feb744b60195233219f3fa801cbc2384efa24b28c76a5d1f3e93efe6557f921
+    container_name: couchdb-podcast
+    restart: unless-stopped
+    environment:
+      COUCHDB_USER: ${COUCHDB_USER:-podagent}
+      COUCHDB_PASSWORD: ${COUCHDB_PASSWORD:?set COUCHDB_PASSWORD in .env}
+    volumes:
+      - couchdb-data:/opt/couchdb/data
+      - couchdb-config:/opt/couchdb/etc/local.d
+    # No `ports:` and internal network only — unreachable from the LAN by design.
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5984/_up"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    logging: *default-logging
+
+  # Started only with `--profile ollama`. On a machine with a GPU worth using —
+  # an Apple Silicon Mac, where Metal is unreachable from a Linux container —
+  # run Ollama natively instead and leave this out, pointing
+  # llm.tiers.*.primary.api_base at it (host.docker.internal, or the LAN IP).
+  #
+  # Unused as shipped: config.yaml has no ollama endpoint in any active chain
+  # while there is no model host worth running. Kept so that restoring one is
+  # `docker compose --profile ollama up -d` plus the config edit, not a rewrite.
+  ollama:
+    profiles: ["ollama"]
+    image: ollama/ollama:latest
+    container_name: podcast-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    networks:
+      - internal
+    environment:
+      OLLAMA_KEEP_ALIVE: "10m"
+      # One model resident at a time keeps NAS memory predictable.
+      OLLAMA_MAX_LOADED_MODELS: "1"
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 24G
+    logging: *default-logging
+
+networks:
+  internal:
+    driver: bridge
+    internal: false # needs egress for RSS/audio fetches and both model providers
+
+volumes:
+  couchdb-data:
+  couchdb-config:
+  ollama-models:
+  podcast-work:

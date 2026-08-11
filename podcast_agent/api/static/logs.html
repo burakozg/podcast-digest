@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Logs · Digest Agent</title>
+<!--
+  Activity view: the in-memory log tail, the durable record of job runs, and
+  every model call. Same posture as the other console pages — one self-contained
+  file, no external requests, inert shell, key supplied by the browser.
+-->
+<style>
+  :root {
+    --bg: #fbfbfa; --panel: #fff; --ink: #1a1a18; --muted: #6b6b66;
+    --line: #e4e4e0; --accent: #2f5d50; --warn: #8a5a00; --bad: #a3352b; --good: #2f6b3a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a; --panel: #1e2024; --ink: #e8e8e4; --muted: #9a9a94;
+      --line: #2e3138; --accent: #7fbfa8; --warn: #d0a24c; --bad: #e0796b; --good: #7fbf8f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+           padding: 1rem 1.25rem; border-bottom: 1px solid var(--line);
+           background: var(--panel); position: sticky; top: 0; z-index: 5; }
+  h1 { font-size: 1.05rem; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  a { color: var(--accent); }
+  main { padding: 1.25rem; max-width: 1180px; margin: 0 auto; display: grid; gap: 1rem; }
+  section { background: var(--panel); border: 1px solid var(--line);
+            border-radius: 10px; padding: 1rem; }
+  h2 { font-size: .78rem; text-transform: uppercase; letter-spacing: .07em;
+       color: var(--muted); margin: 0 0 .75rem; font-weight: 650; }
+  table { width: 100%; border-collapse: collapse; font-size: .87rem; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: .4rem .5rem;
+       border-bottom: 1px solid var(--line); font-size: .78rem; white-space: nowrap; }
+  td { padding: .4rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  .scroll { overflow-x: auto; }
+  button { font: inherit; font-size: .85rem; padding: .35rem .7rem; border-radius: 7px;
+           border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+           cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  select, input { font: inherit; font-size: .85rem; padding: .35rem .5rem; border-radius: 7px;
+                  border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  input[type=password] { width: 100%; margin: .5rem 0; }
+  .pill { font-size: .72rem; padding: .1rem .45rem; border-radius: 999px;
+          border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .sub { color: var(--muted); font-size: .82rem; }
+  #msg { padding: .5rem .75rem; border-radius: 7px; font-size: .85rem; display: none; }
+  #msg.show { display: block; }
+  #msg.err { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
+  #gate { padding: 2rem 1.25rem; max-width: 420px; margin: 3rem auto; }
+
+  .tabs { display: flex; gap: .3rem; flex-wrap: wrap; margin-bottom: .8rem; }
+  .tabs button.here { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  .filters { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center;
+             margin-bottom: .7rem; }
+  .filters input[type=search] { flex: 1; min-width: 200px; }
+
+  /* Log lines are scanned, not read. Monospace keeps the timestamp column
+     aligned so the eye can drop straight to the message. */
+  .logline { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+             font-size: .78rem; line-height: 1.5; padding: .25rem .5rem;
+             border-bottom: 1px solid var(--line); display: grid;
+             grid-template-columns: 5.5rem 4.5rem 1fr; gap: .6rem; align-items: baseline; }
+  .logline:last-child { border-bottom: 0; }
+  .logline .lvl { text-transform: uppercase; font-size: .7rem; font-weight: 700; }
+  .logline.debug .lvl { color: var(--muted); }
+  .logline.info .lvl { color: var(--accent); }
+  .logline.warning .lvl, .logline.warn .lvl { color: var(--warn); }
+  .logline.error .lvl, .logline.critical .lvl, .logline.exception .lvl { color: var(--bad); }
+  .logline.warning, .logline.warn { background: color-mix(in srgb, var(--warn) 7%, transparent); }
+  .logline.error, .logline.critical, .logline.exception {
+    background: color-mix(in srgb, var(--bad) 9%, transparent); }
+  .logline .ts { color: var(--muted); }
+  .logline .ev { font-weight: 650; }
+  .logline .kv { color: var(--muted); }
+  .logstream { max-height: 62vh; overflow-y: auto; border: 1px solid var(--line);
+               border-radius: 8px; }
+  .empty { padding: 1.2rem; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+
+<div id="gate" hidden>
+  <h1>Logs</h1>
+  <p class="sub">Enter the admin API key. Kept in this tab only.</p>
+  <input type="password" id="key" placeholder="API key">
+  <button class="primary" id="unlock">Unlock</button>
+  <p class="sub" id="gateErr" style="color:var(--bad)"></p>
+</div>
+
+<div id="app" hidden>
+<!--NAV-->
+<header>
+  <h1>Logs</h1>
+  <span class="pill" id="count"></span>
+  <span style="flex:1"></span>
+  <label class="sub"><input type="checkbox" id="auto" checked> auto-refresh</label>
+  <button id="reload">Refresh</button>
+  <button id="forget">Forget key</button>
+</header>
+
+<main>
+  <div id="msg"></div>
+
+  <section>
+    <div class="tabs">
+      <button data-tab="log" class="here">Log stream</button>
+      <button data-tab="runs">Scheduled jobs</button>
+      <button data-tab="kept">Kept warnings</button>
+      <button data-tab="llm">Model work</button>
+    </div>
+
+    <div id="tab-log">
+      <div class="filters">
+        <select id="fLevel">
+          <option value="">All levels</option>
+          <option value="info" selected>Info and above</option>
+          <option value="warning">Warnings and errors</option>
+          <option value="error">Errors only</option>
+          <option value="debug">Everything (debug)</option>
+        </select>
+        <input type="search" id="fText" placeholder="Filter — matches any field">
+        <select id="fLimit">
+          <option value="200" selected>200 lines</option>
+          <option value="500">500</option>
+          <option value="1000">1000</option>
+        </select>
+      </div>
+      <div class="logstream" id="logstream"></div>
+      <p class="sub" id="logNote" style="margin:.6rem 0 0"></p>
+    </div>
+
+    <div id="tab-kept" hidden>
+      <div class="filters">
+        <select id="kLevel">
+          <option value="">Warnings and errors</option>
+          <option value="warning">Warnings only</option>
+          <option value="error">Errors only</option>
+        </select>
+        <input type="search" id="kText" placeholder="Filter by event name">
+      </div>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>When</th><th>Level</th><th>Event</th><th>Detail</th></tr></thead>
+          <tbody id="keptRows"></tbody>
+        </table>
+      </div>
+      <p class="sub" id="keptNote" style="margin:.6rem 0 0"></p>
+    </div>
+
+    <div id="tab-runs" hidden>
+      <div class="filters">
+        <select id="fJob">
+          <option value="">All jobs</option>
+          <option value="ingest">ingest</option>
+          <option value="pipeline">pipeline</option>
+          <option value="digest">digest</option>
+          <option value="backfill">backfill</option>
+          <option value="rescore">rescore</option>
+          <option value="retention">retention</option>
+        </select>
+      </div>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>When</th><th>Job</th><th class="num">Took</th><th>Result</th></tr></thead>
+          <tbody id="runRows"></tbody>
+        </table>
+      </div>
+      <p class="sub" style="margin:.6rem 0 0">
+        One row per job firing, stored in the database — this survives a restart.
+        Kept for 90 days, then pruned by the retention job.
+      </p>
+    </div>
+
+    <div id="tab-llm" hidden>
+      <div class="scroll">
+        <table>
+          <thead><tr>
+            <th>Grouped by</th><th></th><th class="num">Calls</th>
+            <th class="num">Tokens in</th><th class="num">Tokens out</th>
+            <th class="num">Avg latency</th><th class="num">Cost</th>
+          </tr></thead>
+          <tbody id="llmRows"></tbody>
+        </table>
+      </div>
+      <p class="sub" style="margin:.6rem 0 0">
+        Every model invocation is recorded as its own document — tokens, latency,
+        cost and whether a fallback was used. Local models cost nothing, so
+        <code>$0.0000</code> against an Ollama model is correct, not missing data.
+      </p>
+
+      <h2 style="margin-top:1.4rem">Local transcription</h2>
+      <div class="scroll">
+        <table>
+          <thead><tr>
+            <th>Grouped by</th><th></th><th class="num">Runs</th>
+            <th class="num">Audio</th><th class="num">Compute</th>
+            <th class="num">Realtime factor</th>
+          </tr></thead>
+          <tbody id="asrRows"></tbody>
+        </table>
+      </div>
+      <p class="sub" style="margin:.6rem 0 0">
+        Kept apart from the calls above rather than folded in: a transcription
+        has no tokens and no price, and averaging its minutes against a triage
+        call's seconds would ruin both figures. The number to watch is the
+        <strong>realtime factor</strong> — seconds of audio per second of compute
+        — which says whether the chosen model and machine suit each other.
+      </p>
+    </div>
+  </section>
+</main>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const KEY_NAME = "podagent_key";
+  const $ = (id) => document.getElementById(id);
+  let tab = "log";
+  let timer = null;
+
+  const key = () => sessionStorage.getItem(KEY_NAME) || "";
+
+  async function api(path, options = {}) {
+    const res = await fetch(path, {
+      ...options,
+      headers: { "X-API-Key": key(), ...(options.headers || {}) },
+    });
+    if (res.status === 401) { lock("Key rejected."); throw new Error("unauthorised"); }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const d = body.detail;
+      throw new Error(typeof d === "string" ? d : JSON.stringify(d || `HTTP ${res.status}`));
+    }
+    return body;
+  }
+
+  function say(text, kind = "err") {
+    const el = $("msg");
+    el.textContent = text;
+    el.className = `show ${kind}`;
+  }
+
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+  const clock = (iso) => {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? "–" : d.toLocaleTimeString([], { hour12: false });
+  };
+
+  const when = (iso) => {
+    if (!iso) return "never";
+    const s = (Date.now() - Date.parse(iso)) / 1000;
+    if (Number.isNaN(s)) return "–";
+    if (s < 60) return "just now";
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+    return `${Math.floor(s / 86400)}d ago`;
+  };
+
+  // Fields rendered in their own column, or too noisy to repeat on every line.
+  const SKIP = new Set(["seq", "level", "timestamp", "event", "logger", "logger_name"]);
+
+  function renderLog(payload) {
+    const events = payload.events || [];
+    $("count").textContent =
+      `${payload.held} of ${payload.capacity} lines held`;
+    $("logstream").innerHTML = events.length
+      ? events.map((e) => {
+          const level = String(e.level || "info").toLowerCase();
+          const pairs = Object.entries(e)
+            .filter(([k, v]) => !SKIP.has(k) && v !== null && v !== "")
+            .map(([k, v]) => `${esc(k)}=${esc(typeof v === "object" ? JSON.stringify(v) : v)}`)
+            .join("  ");
+          return `<div class="logline ${esc(level)}">
+            <span class="ts" title="${esc(e.timestamp || "")}">${esc(clock(e.timestamp))}</span>
+            <span class="lvl">${esc(level)}</span>
+            <span><span class="ev">${esc(e.event ?? "")}</span>${
+              pairs ? ` <span class="kv">${pairs}</span>` : ""}</span>
+          </div>`;
+        }).join("")
+      : `<p class="sub empty">Nothing matches. The buffer is in memory, so it is
+           empty right after a restart and fills as the agent works.</p>`;
+    $("logNote").textContent =
+      `Held in memory only — cleared by a restart. Scheduled jobs and LLM calls ` +
+      `are stored in the database and are on the other two tabs.`;
+  }
+
+  function renderKept(payload) {
+    const rows = payload.events || [];
+    $("keptRows").innerHTML = rows.length
+      ? rows.map((e) => {
+          const detail = Object.entries(e)
+            .filter(([k, v]) =>
+              !["at", "last_at", "level", "event", "logger", "timestamp", "occurrences"]
+                .includes(k) && v !== null && v !== "")
+            .map(([k, v]) => `${esc(k)}=${esc(typeof v === "object" ? JSON.stringify(v) : v)}`)
+            .join("  ");
+          const times = e.occurrences > 1 ? ` <span class="pill">x${esc(e.occurrences)}</span>` : "";
+          return `<tr>
+            <td title="${esc(e.at || "")}">${esc(when(e.at))}</td>
+            <td class="${esc(String(e.level || "").toLowerCase())}">${esc(e.level)}</td>
+            <td><strong>${esc(e.event)}</strong>${times}
+                <div class="sub">${esc(e.logger || "")}</div></td>
+            <td class="sub">${detail}</td>
+          </tr>`;
+        }).join("")
+      : `<tr><td colspan="4" class="sub">Nothing kept yet — which is the good outcome.</td></tr>`;
+
+    $("keptNote").textContent =
+      `Warning and above only, stored in the database and kept for ` +
+      `${payload.retention_days} days, so a restart does not take them with it. ` +
+      `Identical events written together are one row with a count. ` +
+      `${payload.queued} waiting to be written` +
+      (payload.dropped ? `, ${payload.dropped} dropped while the database was unreachable` : "") +
+      `. Episode and feed failures are not duplicated here — they live on the ` +
+      `episode and podcast records.`;
+  }
+
+  function renderRuns(payload) {
+    const runs = payload.runs || [];
+    $("runRows").innerHTML = runs.length
+      ? runs.map((r) => {
+          const s = r.summary || {};
+          const secs = Math.round((s.wall_ms || 0) / 1000);
+          const bits = Object.entries(s)
+            .filter(([k, v]) =>
+              k !== "wall_ms" && typeof v !== "object" && v !== 0 && v !== false && v !== null)
+            .map(([k, v]) => `${esc(k)}=${esc(v)}`)
+            .join(", ");
+          return `<tr>
+            <td title="${esc(r.at || "")}">${esc(when(r.at))}</td>
+            <td><strong>${esc(r.job)}</strong></td>
+            <td class="num">${secs ? `${secs}s` : "–"}</td>
+            <td class="sub">${bits || "no changes"}</td>
+          </tr>`;
+        }).join("")
+      : `<tr><td colspan="4" class="sub">No runs recorded yet.</td></tr>`;
+  }
+
+  // The endpoint returns each grouping as an object keyed by name, not a list.
+  // The config keys are tier0/tier1 and cannot change without breaking every
+  // deployment's config.yaml, but nothing here is a place you edit them — this
+  // is a report. It says what the stage does, and keeps the key beside it so a
+  // row can still be connected to the setting that produced it.
+  const TIER_LABELS = { tier0: "Triage", tier1: "Summarise" };
+
+  function llmGroup(label, buckets) {
+    const names = Object.keys(buckets || {});
+    if (!names.length) return "";
+    return `<tr><td colspan="7" class="sub"><strong>${esc(label)}</strong></td></tr>` +
+      names.map((name) => {
+        const m = buckets[name];
+        const shown = TIER_LABELS[name]
+          ? `${esc(TIER_LABELS[name])} <span class="sub"><code>${esc(name)}</code></span>`
+          : esc(name);
+        return `<tr>
+          <td></td><td><strong>${shown}</strong></td>
+          <td class="num">${esc(m.calls ?? 0)}</td>
+          <td class="num">${esc(m.input_tokens ?? 0)}</td>
+          <td class="num">${esc(m.output_tokens ?? 0)}</td>
+          <td class="num">${m.avg_latency_ms != null ? `${esc(m.avg_latency_ms)}ms` : "–"}</td>
+          <td class="num">$${Number(m.cost_usd || 0).toFixed(4)}</td>
+        </tr>`;
+      }).join("");
+  }
+
+  function renderASR(asr) {
+    const row = (label, name, e) => `<tr>
+      <td>${esc(label)}</td><td><strong>${esc(name)}</strong></td>
+      <td class="num">${esc(e.runs)}</td>
+      <td class="num">${esc(e.audio_hours)} h</td>
+      <td class="num">${esc(e.compute_hours)} h</td>
+      <td class="num">${e.realtime_factor != null ? `${esc(e.realtime_factor)}x` : "–"}</td>
+    </tr>`;
+
+    if (!asr || !asr.runs) {
+      $("asrRows").innerHTML =
+        `<tr><td colspan="6" class="sub">Nothing transcribed locally in this window.</td></tr>`;
+      return;
+    }
+    $("asrRows").innerHTML =
+      row("Total", `${asr.runs} episodes`, asr) +
+      Object.entries(asr.by_model).map(([k, e]) => row("", k, e)).join("") +
+      `<tr><td colspan="6" class="sub"><strong>By podcast</strong></td></tr>` +
+      Object.entries(asr.by_podcast).map(([k, e]) => row("", k, e)).join("");
+  }
+
+  function renderLLM(payload) {
+    const t = payload.totals || {};
+    const body =
+      llmGroup("By model", payload.by_model) +
+      llmGroup("By provider", payload.by_provider) +
+      llmGroup("By tier", payload.by_tier);
+    $("llmRows").innerHTML = body
+      ? `<tr><td colspan="2"><strong>Last ${esc(payload.window_days)} days</strong></td>
+           <td class="num"><strong>${esc(t.calls ?? 0)}</strong></td>
+           <td class="num">${esc(t.input_tokens ?? 0)}</td>
+           <td class="num">${esc(t.output_tokens ?? 0)}</td>
+           <td class="num">–</td>
+           <td class="num"><strong>$${Number(t.cost_usd || 0).toFixed(4)}</strong></td></tr>` + body
+      : `<tr><td colspan="7" class="sub">No model calls recorded in this window.</td></tr>`;
+    renderASR(payload.asr);
+  }
+
+  async function load() {
+    try {
+      if (tab === "log") {
+        const params = new URLSearchParams({
+          level: $("fLevel").value,
+          contains: $("fText").value.trim(),
+          limit: $("fLimit").value,
+        });
+        renderLog(await api(`/api/v1/logs?${params}`));
+      } else if (tab === "kept") {
+        const params = new URLSearchParams({
+          level: $("kLevel").value, contains: $("kText").value.trim(), limit: "200",
+        });
+        renderKept(await api(`/api/v1/logs/stored?${params}`));
+      } else if (tab === "runs") {
+        const job = $("fJob").value;
+        renderRuns(await api(`/api/v1/runs?limit=100${job ? `&job=${encodeURIComponent(job)}` : ""}`));
+      } else {
+        renderLLM(await api("/api/v1/telemetry/costs?days=30"));
+      }
+      $("msg").className = "";
+    } catch (err) {
+      if (err.message !== "unauthorised") say(`Load failed: ${err.message}`);
+    }
+  }
+
+  function showTab(next) {
+    tab = next;
+    for (const name of ["log", "kept", "runs", "llm"]) {
+      $(`tab-${name}`).hidden = name !== next;
+    }
+    document.querySelectorAll("[data-tab]").forEach((b) =>
+      b.className = b.dataset.tab === next ? "here" : "");
+    if (next !== "log") $("count").textContent = "";
+    load();
+  }
+
+  function schedule() {
+    if (timer) clearInterval(timer);
+    // Only the log stream benefits from polling; runs and costs change slowly.
+    if ($("auto").checked) timer = setInterval(() => { if (tab === "log") load(); }, 5000);
+  }
+
+  async function unlock() {
+    const value = $("key").value.trim();
+    if (!value) return;
+    sessionStorage.setItem(KEY_NAME, value);
+    try { await api("/api/v1/logs?limit=1"); start(); }
+    catch { sessionStorage.removeItem(KEY_NAME); $("gateErr").textContent = "That key was rejected."; }
+  }
+
+  function lock(reason) {
+    sessionStorage.removeItem(KEY_NAME);
+    if (timer) clearInterval(timer);
+    $("app").hidden = true; $("gate").hidden = false;
+    $("gateErr").textContent = reason || "";
+  }
+
+  function start() { $("gate").hidden = true; $("app").hidden = false; load(); schedule(); }
+
+  document.querySelectorAll("[data-tab]").forEach((b) =>
+    b.addEventListener("click", () => showTab(b.dataset.tab)));
+  $("unlock").addEventListener("click", unlock);
+  $("key").addEventListener("keydown", (e) => { if (e.key === "Enter") unlock(); });
+  $("reload").addEventListener("click", load);
+  $("forget").addEventListener("click", () => lock("Key cleared."));
+  $("auto").addEventListener("change", schedule);
+  $("fLevel").addEventListener("change", load);
+  $("fLimit").addEventListener("change", load);
+  $("fJob").addEventListener("change", load);
+  $("kLevel").addEventListener("change", load);
+  let debounce = null;
+  $("kText").addEventListener("input", () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(load, 250);
+  });
+  $("fText").addEventListener("input", () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(load, 250);
+  });
+
+  if (key()) start(); else $("gate").hidden = false;
+})();
+</script>
+</body>
+</html>

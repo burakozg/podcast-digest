@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Settings · Digest Agent</title>
+<!--
+  Configuration console. config.yaml stays the declared baseline; changes here
+  are stored as overrides in the database and applied at the next restart.
+
+  Deliberately not live: swapping a provider rebuilds the LLM router and editing
+  the interest profile invalidates every cached prompt. Doing either underneath a
+  summarisation in flight is a poor trade for a setting that changes rarely.
+-->
+<style>
+  :root {
+    --bg: #fbfbfa; --panel: #fff; --ink: #1a1a18; --muted: #6b6b66;
+    --line: #e4e4e0; --accent: #2f5d50; --warn: #8a5a00; --bad: #a3352b; --good: #2f6b3a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a; --panel: #1e2024; --ink: #e8e8e4; --muted: #9a9a94;
+      --line: #2e3138; --accent: #7fbfa8; --warn: #d0a24c; --bad: #e0796b; --good: #7fbf8f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+           padding: 1rem 1.25rem; border-bottom: 1px solid var(--line);
+           background: var(--panel); position: sticky; top: 0; z-index: 5; }
+  h1 { font-size: 1.05rem; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  a { color: var(--accent); }
+  main { padding: 1.25rem; max-width: 1180px; margin: 0 auto; display: grid; gap: 1rem; }
+  section { background: var(--panel); border: 1px solid var(--line);
+            border-radius: 10px; padding: 1rem; }
+  h2 { font-size: .78rem; text-transform: uppercase; letter-spacing: .07em;
+       color: var(--muted); margin: 0 0 .75rem; font-weight: 650; }
+  table { width: 100%; border-collapse: collapse; font-size: .87rem; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: .4rem .5rem;
+       border-bottom: 1px solid var(--line); font-size: .78rem; white-space: nowrap; }
+  td { padding: .45rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  tr.off td { opacity: .5; }
+  .scroll { overflow-x: auto; }
+  button { font: inherit; font-size: .85rem; padding: .35rem .7rem; border-radius: 7px;
+           border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+           cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  select, input { font: inherit; font-size: .85rem; padding: .35rem .5rem; border-radius: 7px;
+                  border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  input[type=password] { width: 100%; margin: .5rem 0; }
+  .pill { font-size: .72rem; padding: .1rem .45rem; border-radius: 999px;
+          border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .pill.on { color: var(--good); border-color: currentColor; }
+  .pill.off { color: var(--warn); border-color: currentColor; }
+  .pill.bad { color: var(--bad); border-color: currentColor; }
+  .sub { color: var(--muted); font-size: .82rem; }
+  .toggle { cursor: pointer; user-select: none; font-weight: 600; }
+  .toggle.on { color: var(--good); }
+  .toggle.off { color: var(--muted); }
+  .ovr { border-bottom: 1px dotted var(--warn); }
+  #msg { padding: .5rem .75rem; border-radius: 7px; font-size: .85rem; display: none; }
+  #msg.show { display: block; }
+  #msg.err { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
+  #msg.ok { background: color-mix(in srgb, var(--good) 12%, transparent); color: var(--good); }
+  #gate { padding: 2rem 1.25rem; max-width: 420px; margin: 3rem auto; }
+  .addgrid { display: grid; gap: .6rem; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+  fieldset { border: 1px solid var(--line); border-radius: 8px; padding: .75rem; }
+  legend { font-size: .78rem; color: var(--muted); padding: 0 .35rem; }
+</style>
+</head>
+<body>
+
+<div id="gate" hidden>
+  <h1>Settings</h1>
+  <p class="sub">Enter the admin API key. Kept in this tab only.</p>
+  <input type="password" id="key" placeholder="API key">
+  <button class="primary" id="unlock">Unlock</button>
+  <p class="sub" id="gateErr" style="color:var(--bad)"></p>
+</div>
+
+<div id="app" hidden>
+<!--NAV-->
+<header>
+  <h1>Settings</h1>
+  <span style="flex:1"></span>
+  <button id="reload">Reload</button>
+  <button id="forget">Forget key</button>
+</header>
+
+<main>
+  <div id="msg"></div>
+  <div id="pending" class="sub" hidden
+       style="padding:.6rem .8rem;border-radius:7px;
+              background:color-mix(in srgb, var(--warn) 15%, transparent);color:var(--warn)">
+    <div id="pendingWhen"></div>
+    <div style="margin-top:.35rem">
+      Restart the agent itself to apply them —
+      <code>docker compose restart podcast-agent</code> if it runs under
+      Compose, otherwise restart however you started it. Restarting the
+      database container alone changes nothing here.
+    </div>
+  </div>
+
+  <section>
+    <h2>Models</h2>
+    <p class="sub" style="margin:-.35rem 0 .8rem">
+      <strong>Triage</strong> judges every episode from its description, so it
+      wants to be cheap and fast. <strong>Summarise</strong> writes the summary
+      you read, from a full transcript, so it wants to be capable and can afford
+      to be slow. Fallbacks are tried in order when an endpoint times out,
+      errors, or fails validation twice.
+    </p>
+    <div id="tiers"></div>
+    <p class="sub" id="keyNote" style="margin:.6rem 0 0"></p>
+  </section>
+
+  <section>
+    <h2>Local transcription</h2>
+    <p class="sub" style="margin:-.35rem 0 .8rem">
+      Speech-to-text runs <strong>in this process, on this machine</strong>, using
+      <code>faster-whisper</code> — a CTranslate2 build of OpenAI's Whisper.
+      (Configured under <code>asr</code> in <code>config.yaml</code>, the one
+      place the older name survives.)
+      Audio is downloaded to the work directory, transcribed, and deleted unless
+      <em>keep audio</em> is set. Nothing is sent anywhere.
+      <br><br>
+      It is the <em>last</em> transcript strategy, tried only when a podcast
+      publishes none — see the Transcripts column on
+      <a href="/admin/podcasts">Podcasts</a> for which of yours actually need it.
+    </p>
+    <div class="addgrid" id="asr"></div>
+    <p class="sub" id="asrFixed" style="margin:.8rem 0 0"></p>
+  </section>
+
+  <section>
+    <h2>Historical intake</h2>
+    <p class="sub" style="margin:-.35rem 0 .8rem">
+      Whether the archive transcribes a podcast is decided per podcast, by the
+      <em>Transcribe locally</em> toggle on <a href="/admin/podcasts">Podcasts</a>.
+      An archive episode with no published transcript, for a podcast not set to
+      transcribe, is indexed and scored but never summarised — there is nothing
+      to summarise from.
+    </p>
+    <div class="addgrid" id="backfill"></div>
+  </section>
+
+  <section>
+    <h2>Prioritisation</h2>
+    <p class="sub" style="margin:-.35rem 0 .8rem">
+      How an episode is routed. Triage returns a relevance guess and a confidence
+      that the <em>description was informative enough to judge</em> — these
+      thresholds turn those two numbers into a decision, in code, never by the
+      model.
+    </p>
+    <div class="addgrid" id="thresholds"></div>
+    <div id="ladder" class="sub" style="margin-top:.9rem"></div>
+  </section>
+
+  <section>
+    <h2>Interests</h2>
+    <p class="sub" style="margin:-.35rem 0 .8rem">
+      Injected into every prompt and scored against by both tiers. Be specific —
+      vague descriptions produce vague scoring. Weight is relative importance.
+      Changing anything here means past scores were made under a different
+      profile; the operations page will offer to re-score them.
+    </p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Key</th><th>Label</th><th>Description</th><th>Weight</th><th></th></tr></thead>
+        <tbody id="interests"></tbody>
+      </table>
+    </div>
+    <button id="addInterest" style="margin-top:.6rem">Add interest</button>
+  </section>
+
+  <section>
+    <div style="display:flex;gap:.6rem;flex-wrap:wrap;align-items:center">
+      <button id="save" class="primary">Save changes</button>
+      <button id="reset">Discard all overrides</button>
+      <span class="sub">Validated exactly as a config file is, before anything is stored.</span>
+    </div>
+    <p class="sub" style="margin:.7rem 0 0">
+      <code>config.yaml</code> stays the baseline. Discarding overrides returns
+      every value here to whatever the file says.
+    </p>
+    <pre id="raw" style="margin-top:.8rem">–</pre>
+  </section>
+</main>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const KEY_NAME = "podagent_key";
+  const $ = (id) => document.getElementById(id);
+  let current = null;
+
+  const key = () => sessionStorage.getItem(KEY_NAME) || "";
+
+  async function api(path, options = {}) {
+    const res = await fetch(path, {
+      ...options,
+      headers: {
+        "X-API-Key": key(),
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...(options.headers || {}),
+      },
+    });
+    if (res.status === 401) { lock("Key rejected."); throw new Error("unauthorised"); }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const d = body.detail;
+      throw new Error(typeof d === "string" ? d : JSON.stringify(d || `HTTP ${res.status}`));
+    }
+    return body;
+  }
+
+  function say(text, kind = "ok") {
+    const el = $("msg");
+    el.textContent = text;
+    el.className = `show ${kind}`;
+    if (kind === "ok") setTimeout(() => { el.className = ""; }, 8000);
+  }
+
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+  const PROVIDERS = ["ollama", "openrouter", "anthropic"];
+  const CLOUD_PROVIDERS = new Set(["openrouter", "anthropic"]);
+
+  // What each provider talks to when "API base" is left blank. Ollama is the
+  // only one with a local default; the cloud providers use their own endpoint,
+  // which litellm supplies.
+  const DEFAULT_BASE = {
+    ollama: "http://127.0.0.1:11434",
+    openrouter: "the provider's own endpoint",
+    anthropic: "the provider's own endpoint",
+  };
+
+  function isLocalHost(value) {
+    let host;
+    try { host = new URL(value).hostname; } catch { return false; }
+    return host === "localhost" || host === "::1" || /^127\./.test(host) ||
+      /^10\./.test(host) || /^192\.168\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+  }
+
+  function endpointFields(tier, idx, e) {
+    const id = `${tier}-${idx}`;
+    return `<div class="addgrid" data-endpoint="${id}" style="margin:.4rem 0">
+      <label class="sub">Provider<br>
+        <select data-f="provider" style="width:100%">${PROVIDERS.map((p) =>
+          `<option${p === e.provider ? " selected" : ""}>${p}</option>`).join("")}</select></label>
+      <label class="sub">Model<br>
+        <input data-f="model" value="${esc(e.model)}" style="width:100%"></label>
+      <label class="sub">API base<br>
+        <input data-f="api_base" value="${esc(e.api_base || "")}"
+               placeholder="${esc(DEFAULT_BASE[e.provider] || "default for provider")}"
+               style="width:100%"></label>
+      <label class="sub">Temperature<br>
+        <input data-f="temperature" type="number" step="0.1" min="0" max="2"
+               value="${esc(e.temperature)}" style="width:100%"></label>
+      <label class="sub"
+             title="Blank lets the provider pick. Providers pick badly: a limit too low for the reply cuts it off mid-answer, and the whole call is wasted.">Reply limit
+        <br><input data-f="max_tokens" type="number" step="1" min="1"
+               value="${e.max_tokens ?? ""}" placeholder="provider default"
+               style="width:100%"></label>
+      <div data-f="baseNote" class="sub" hidden
+           style="grid-column:1/-1;margin-top:-.2rem;color:var(--warn)"></div>
+    </div>`;
+  }
+
+  // An address belongs to the provider it was written for, so changing the
+  // provider must not leave the previous one's address behind. It did, and
+  // selecting openrouter kept Ollama's 127.0.0.1:11434 in the field — which
+  // validates (it is a URL) and would send cloud requests, with the cloud API
+  // key attached, to a local port.
+  function wireEndpoints() {
+    document.querySelectorAll("[data-endpoint]").forEach((row) => {
+      const providerEl = row.querySelector('[data-f="provider"]');
+      const baseEl = row.querySelector('[data-f="api_base"]');
+      const noteEl = row.querySelector('[data-f="baseNote"]');
+
+      function refresh() {
+        const provider = providerEl.value;
+        baseEl.placeholder = DEFAULT_BASE[provider] || "default for provider";
+        const mismatch = CLOUD_PROVIDERS.has(provider) && baseEl.value.trim() &&
+          isLocalHost(baseEl.value.trim());
+        noteEl.hidden = !mismatch;
+        noteEl.textContent = mismatch
+          ? `This points ${provider} at a local address. Correct only if you run an ` +
+            `API-compatible proxy there; leave it blank to use ${provider} itself.`
+          : "";
+      }
+
+      providerEl.addEventListener("change", () => {
+        // Cleared rather than translated: there is no sensible mapping from one
+        // provider's address to another's, and blank already means "the
+        // provider's default", which is what almost everyone wants.
+        baseEl.value = "";
+        refresh();
+      });
+      baseEl.addEventListener("input", refresh);
+      refresh();
+    });
+  }
+
+  // What this tier will actually use, and — when the answer is not what the
+  // fields above it say — why. The switch removes cloud endpoints from the
+  // whole chain, so a tier can show `openrouter` as its primary and still run
+  // entirely on Ollama. Reading "now:" against the fields gave no hint of that.
+  function chainNote(tier) {
+    const now = `now: ${esc(tier.active_chain.join("  →  "))}`;
+    const dropped = tier.allow_cloud_fallback
+      ? []
+      : [tier.primary, ...tier.fallbacks].filter((e) => e.is_cloud);
+    if (!dropped.length) return `<span class="sub">${now}</span>`;
+    return `<span class="sub">${now}</span>
+      <span class="sub" style="color:var(--warn)">
+        ${esc(dropped.map((e) => e.litellm_model).join(", "))} skipped —
+        cloud endpoints are switched off for this tier
+      </span>`;
+  }
+
+  function renderTiers(tiers) {
+    $("tiers").innerHTML = Object.entries(tiers).map(([name, tier]) => `
+      <fieldset data-tier="${name}" style="margin-bottom:.9rem">
+        <legend>${esc(TIER_LABELS[name] || name)}
+          <span class="sub" style="font-weight:400"> · <code>llm.tiers.${esc(name)}</code></span>
+        </legend>
+        <div class="sub">Primary</div>
+        ${endpointFields(name, "primary", tier.primary)}
+        ${tier.fallbacks.map((f, i) => `<div class="sub">Fallback ${esc(i + 1)}</div>` +
+            endpointFields(name, `fb${i}`, f)).join("")}
+        <div style="display:flex;gap:1.2rem;flex-wrap:wrap;margin-top:.5rem;align-items:center">
+          <label class="sub">Timeout (s)
+            <input data-tf="timeout_s" type="number" min="5" max="3600"
+                   value="${esc(tier.timeout_s)}" style="width:6rem"></label>
+          <label class="sub"
+                 title="Off means no request from this tier leaves the machine. It removes every cloud endpoint from the chain, the primary included — not just the fallbacks.">
+            <input type="checkbox" data-tf="allow_cloud_fallback"
+            ${tier.allow_cloud_fallback ? "checked" : ""}> use cloud endpoints</label>
+          ${chainNote(tier)}
+        </div>
+      </fieldset>`).join("");
+    wireEndpoints();
+  }
+
+  const THRESHOLDS = [
+    ["t_conf_high", "Confidence needed to trust a description",
+     "Below this, the episode is transcribed rather than judged on the description."],
+    ["t_rel_low", "Drop below this relevance",
+     "Only applies when confidence is high enough to trust the description."],
+    ["t_rel_high", "Full summary at or above this relevance", ""],
+    ["digest_threshold", "Score needed for a digest entry", ""],
+    ["top_pick_threshold", "Score needed to be a Top pick", ""],
+    ["initial_lookback_days", "Days of history on a brand-new show", ""],
+  ];
+
+  // Free text where the value is open-ended, a fixed list where a wrong value
+  // means a model that will not load or a device that does not exist.
+  // The config keys are tier0/tier1 and cannot change without breaking every
+  // deployment's config.yaml. The console shows what each one does instead, and
+  // names the key beside it so the two are connectable.
+  const TIER_LABELS = {
+    tier0: "Triage — judge every episode from its description",
+    tier1: "Summarise — write the summary you read",
+  };
+
+  const ASR_FIELDS = [
+    ["model", "Model", "select",
+     ["tiny.en", "base.en", "small.en", "medium.en", "large-v3-turbo", "large-v3"],
+     "Bigger is more accurate and much slower. On CPU, small.en is the usual compromise."],
+    ["device", "Device", "select", ["cpu", "cuda", "auto"],
+     "Apple Silicon has no CUDA and CTranslate2 has no Metal backend, so cpu is correct on a Mac."],
+    ["compute_type", "Compute type", "select",
+     ["int8", "int8_float16", "float16", "float32"],
+     "int8 is roughly 4x faster than float32 on CPU for a small accuracy cost."],
+    ["language", "Language", "text", null,
+     "An ISO code such as en. Leave blank to let Whisper detect it, which costs a little time."],
+    ["beam_size", "Beam size", "number", null,
+     "1 is greedy decoding. Higher is slightly better and proportionally slower."],
+    ["backend", "Backend", "select", ["local", "remote"],
+     "remote is a placeholder in v1 and needs asr.remote_url in config.yaml."],
+    ["keep_audio", "Keep audio", "check", null,
+     "Leaves the downloaded file on disk after transcribing. For debugging only."],
+  ];
+
+  function renderASR(asr, fixed, installed) {
+    $("asr").innerHTML = ASR_FIELDS.map(([k, label, kind, options, help]) => {
+      const value = asr[k];
+      let control;
+      if (kind === "select") {
+        const list = options.includes(String(value)) ? options : [...options, String(value)];
+        control = `<select data-a="${k}" style="width:100%">${list.map((o) =>
+          `<option${String(o) === String(value) ? " selected" : ""}>${esc(o)}</option>`
+        ).join("")}</select>`;
+      } else if (kind === "check") {
+        control = `<input data-a="${k}" type="checkbox"${value ? " checked" : ""}>`;
+      } else {
+        control = `<input data-a="${k}" type="${kind}" value="${esc(value ?? "")}" style="width:100%">`;
+      }
+      return `<label class="sub">${esc(label)}<br>${control}
+        <span style="display:block;margin-top:.2rem">${esc(help)}</span></label>`;
+    }).join("");
+
+    const caps = `Fixed in config.yaml: max audio ${fixed.max_audio_mb} MB, ` +
+      `${fixed.asr_concurrency} transcription at a time, ` +
+      `${fixed.download_concurrency} parallel downloads. ` +
+      `Those protect the machine rather than express a preference.`;
+    $("asrFixed").innerHTML = installed
+      ? esc(caps)
+      : `<strong style="color:var(--bad)">faster-whisper is not installed in this
+         process</strong>, so local transcription cannot run whatever is set here —
+         install the <code>asr</code> extra. ${esc(caps)}`;
+  }
+
+  const BACKFILL_FIELDS = [
+    ["digest_threshold", "Archive threshold", "number",
+     "Score an archive episode must reach to earn a full entry. Stricter than " +
+     "the weekly threshold, because old material has to be worth the detour."],
+  ];
+
+  function renderBackfill(backfill) {
+    $("backfill").innerHTML = BACKFILL_FIELDS.map(([k, label, kind, help]) => {
+      const control =
+        `<input data-b="${k}" type="number" value="${esc(backfill[k])}" style="width:100%">`;
+      return `<label class="sub">${esc(label)}<br>${control}
+        <span style="display:block;margin-top:.2rem">${esc(help)}</span></label>`;
+    }).join("");
+  }
+
+  function renderThresholds(pipeline) {
+    $("thresholds").innerHTML = THRESHOLDS.map(([k, label, help]) => `
+      <label class="sub">${esc(label)}<br>
+        <input data-p="${k}" type="number" value="${esc(pipeline[k])}" style="width:100%">
+        ${help ? `<span style="display:block;margin-top:.2rem">${esc(help)}</span>` : ""}
+      </label>`).join("");
+    renderLadder(pipeline);
+  }
+
+  function renderLadder(p) {
+    $("ladder").innerHTML =
+      `<strong>Reads as:</strong> if confidence &lt; ${esc(p.t_conf_high)}, transcribe it — a thin ` +
+      `description is never grounds to drop an episode. Otherwise: relevance &lt; ${p.t_rel_low} ` +
+      `is dropped, ≥ ${p.t_rel_high} gets a full summary, and anything between is listed as a ` +
+      `one-liner. A summary then needs ${p.digest_threshold}/10 to make the digest and ` +
+      `${p.top_pick_threshold}/10 to be a Top pick.`;
+  }
+
+  function renderInterests(profile) {
+    $("interests").innerHTML = profile.map((i, idx) => `
+      <tr data-interest="${idx}">
+        <td><input data-i="key" value="${esc(i.key)}" size="12"></td>
+        <td><input data-i="label" value="${esc(i.label)}" size="16"></td>
+        <td><input data-i="description" value="${esc(i.description)}" style="width:100%"></td>
+        <td><input data-i="weight" type="number" min="1" max="10" value="${esc(i.weight)}" size="3"></td>
+        <td><button data-drop="${idx}">Remove</button></td>
+      </tr>`).join("");
+    document.querySelectorAll("[data-drop]").forEach((b) =>
+      b.addEventListener("click", () => {
+        current.interest_profile.splice(Number(b.dataset.drop), 1);
+        renderInterests(current.interest_profile);
+      }));
+  }
+
+  function collect() {
+    const tiers = {};
+    document.querySelectorAll("[data-tier]").forEach((box) => {
+      const loaded = current.tiers[box.dataset.tier];
+      // Row order is primary, then fallbacks — the same order renderTiers used.
+      const asLoaded = [loaded.primary, ...loaded.fallbacks];
+      const endpoints = [...box.querySelectorAll("[data-endpoint]")].map((row, i) => {
+        const get = (f) => row.querySelector(`[data-f="${f}"]`).value.trim();
+        return {
+          provider: get("provider"),
+          model: get("model"),
+          api_base: get("api_base") || null,
+          temperature: Number(get("temperature")),
+          max_tokens: get("max_tokens") ? Number(get("max_tokens")) : null,
+          // Not editable here, so carry each endpoint's own through. Taking the
+          // primary's for every row copied Ollama's num_ctx onto the OpenRouter
+          // fallback, and wiped it from an Ollama fallback under a cloud primary.
+          extra_params: (asLoaded[i] || {}).extra_params || {},
+        };
+      });
+      tiers[box.dataset.tier] = {
+        primary: endpoints[0],
+        fallbacks: endpoints.slice(1),
+        timeout_s: Number(box.querySelector('[data-tf="timeout_s"]').value),
+        allow_cloud_fallback: box.querySelector('[data-tf="allow_cloud_fallback"]').checked,
+      };
+    });
+
+    const pipeline = {};
+    document.querySelectorAll("[data-p]").forEach((el) => {
+      pipeline[el.dataset.p] = Number(el.value);
+    });
+
+    const interest_profile = [...document.querySelectorAll("[data-interest]")].map((row) => {
+      const get = (f) => row.querySelector(`[data-i="${f}"]`).value.trim();
+      return {
+        key: get("key"), label: get("label"),
+        description: get("description"), weight: Number(get("weight")),
+      };
+    });
+
+    const asr = {};
+    document.querySelectorAll("[data-a]").forEach((el) => {
+      const k = el.dataset.a;
+      if (el.type === "checkbox") asr[k] = el.checked;
+      else if (el.type === "number") asr[k] = Number(el.value);
+      else asr[k] = el.value.trim() === "" ? null : el.value.trim();
+    });
+
+    const backfill = {};
+    document.querySelectorAll("[data-b]").forEach((el) => {
+      backfill[el.dataset.b] = Number(el.value);
+    });
+
+    return { tiers, pipeline, interest_profile, asr, backfill };
+  }
+
+  function since(iso) {
+    const mins = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000));
+    if (mins < 60) return `${mins} min ago`;
+    const h = Math.floor(mins / 60);
+    return `${h} h ${mins % 60} min ago`;
+  }
+
+  // Says which process is out of date and since when. The banner used to state
+  // only that a restart was needed, and name one command; when that command
+  // restarted the database container instead of the agent, nothing changed and
+  // the banner looked stuck rather than accurate.
+  function renderPending(s) {
+    $("pending").hidden = !s.pending_restart;
+    if (!s.pending_restart) return;
+    const saved = s.updated_at ? new Date(s.updated_at).toLocaleString() : "recently";
+    let text = `Saved changes (${saved}) are waiting for a restart.`;
+    if (s.started_at) {
+      const started = new Date(s.started_at);
+      const when = `${started.toLocaleString()}, ${since(s.started_at)}`;
+      text += new Date(s.updated_at) > started
+        ? ` The agent serving this page started ${when} — before that save — so it is still running the previous configuration.`
+        : ` The agent started ${when}, after that save, but did not record the change as applied.`;
+    }
+    $("pendingWhen").textContent = text;
+  }
+
+  async function load() {
+    try {
+      current = await api("/api/v1/settings");
+      renderTiers(current.tiers);
+      renderThresholds(current.pipeline);
+      renderASR(current.asr, current.asr_fixed, current.asr_installed);
+      renderBackfill(current.backfill);
+      renderInterests(current.interest_profile);
+      renderPending(current);
+      const keyState = current.has_openrouter_key
+        ? "OpenRouter key is set."
+        : "OpenRouter key is NOT set — an openrouter endpoint would refuse to start.";
+      $("keyNote").textContent =
+        `${keyState} Interest profile version ${current.interest_profile_version}.`;
+      document.querySelectorAll("[data-p]").forEach((el) =>
+        el.addEventListener("input", () => {
+          const p = {}; document.querySelectorAll("[data-p]").forEach((x) => { p[x.dataset.p] = Number(x.value); });
+          renderLadder(p);
+        }));
+    } catch (err) {
+      if (err.message !== "unauthorised") say(err.message, "err");
+    }
+  }
+
+  async function save() {
+    try {
+      const body = await api("/api/v1/settings", {
+        method: "PUT", body: JSON.stringify(collect()),
+      });
+      $("raw").textContent = JSON.stringify(body, null, 2);
+      say(body.detail);
+      load();
+    } catch (err) {
+      $("raw").textContent = err.message;
+      say(`Rejected: ${err.message}`, "err");
+    }
+  }
+
+  async function reset() {
+    if (!confirm("Discard every override and return to config.yaml on next restart?")) return;
+    try {
+      const body = await api("/api/v1/settings", { method: "DELETE" });
+      say(body.detail);
+      load();
+    } catch (err) { say(err.message, "err"); }
+  }
+
+  async function unlock() {
+    const value = $("key").value.trim();
+    if (!value) return;
+    sessionStorage.setItem(KEY_NAME, value);
+    try { await api("/api/v1/settings"); start(); }
+    catch { sessionStorage.removeItem(KEY_NAME); $("gateErr").textContent = "That key was rejected."; }
+  }
+
+  function lock(reason) {
+    sessionStorage.removeItem(KEY_NAME);
+    $("app").hidden = true; $("gate").hidden = false;
+    $("gateErr").textContent = reason || "";
+  }
+
+  function start() { $("gate").hidden = true; $("app").hidden = false; load(); }
+
+  $("save").addEventListener("click", save);
+  $("reset").addEventListener("click", reset);
+  $("reload").addEventListener("click", load);
+  $("addInterest").addEventListener("click", () => {
+    current.interest_profile.push({ key: "", label: "", description: "", weight: 5 });
+    renderInterests(current.interest_profile);
+  });
+  $("forget").addEventListener("click", () => lock("Key cleared."));
+  $("unlock").addEventListener("click", unlock);
+  $("key").addEventListener("keydown", (e) => { if (e.key === "Enter") unlock(); });
+
+  if (key()) start(); else $("gate").hidden = false;
+})();
+</script>
+</body>
+</html>

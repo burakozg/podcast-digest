@@ -1,0 +1,114 @@
+# NAS-specific overrides for a QNAP running Container Station.
+#
+# Used with BOTH files, in this order — the base file alone is still the
+# portable deployment and must keep working unchanged:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.nas.yml up -d
+#
+# `qnap/deploy.sh` does that for you. Everything here exists because of
+# something specific about this machine; see DEPLOY-NAS.md for the evidence
+# behind each one.
+#
+# 1. BIND MOUNTS instead of named volumes. Named volumes live under Container
+#    Station's internal storage, where QNAP's folder-based backup jobs (Hybrid
+#    Backup Sync et al.) cannot see them. Bound under the app directory, the
+#    whole of this service's state — database, work dir, digests — sits in one
+#    folder tree those jobs can capture.
+#
+# 2. `user: "1002:100"` on the agent. It runs as uid 10001 in the image with a
+#    read-only root filesystem and every capability dropped, so it cannot chown
+#    anything. Docker creates missing bind-mount paths as root:root, which
+#    uid 10001 then cannot write. Running as the SSH user that owns the
+#    directories sidesteps it without needing sudo on the NAS. CouchDB needs no
+#    such treatment: its entrypoint starts as root and chowns its own data dir.
+#
+# 3. A LAN IP for the agent (NAS_LAN_IP in .env), on Container Station's
+#    existing qnet network. The console answers on that address directly,
+#    rather than through a port published on the NAS itself.
+#
+#    The agent stays on `internal` as well, and that is not redundant: qnet on
+#    this NAS has no embedded Docker DNS, service names do not resolve on it,
+#    and even direct container-IP-to-container-IP traffic between two qnet
+#    containers has been observed to fail. `couchdb.url` resolves
+#    `couchdb-podcast` over `internal` and must keep doing so.
+#
+#    CouchDB gets NO qnet address, deliberately. Whoever can reach that database
+#    can change where model work is sent (see the base file's header). It is
+#    published on the NAS's loopback only — enough for the nightly backup, and
+#    invisible from the LAN.
+#
+#    Expect the NAS host to be unable to reach NAS_LAN_IP itself. That is how
+#    macvlan works, not a fault: a host cannot talk to its own macvlan children.
+#    Drive the console from another machine on the LAN.
+#
+# 4. Memory. This NAS has ~7.8 GB total with ~3 GB genuinely free, shared with
+#    Home Assistant, traefik, two other digest services and the wyoming voice
+#    stack. The base file's 4 GB agent limit is sized for large-v3-turbo ASR;
+#    here `PODAGENT_ASR__MODEL=small.en` in .env brings the footprint down and
+#    the limit comes down with it.
+
+services:
+  podcast-agent:
+    user: "1002:100"
+    environment:
+      # Logs in local time; the scheduler has its own configured timezone.
+      TZ: Europe/Stockholm
+      # Cut cumulative memory pressure within one process lifetime.
+      #
+      # The container was OOM-killed with only ~460-760 MB resident, so the
+      # spike is a large allocation on top of a baseline that concurrent work
+      # was inflating: audio for other episodes downloads while one is being
+      # transcribed. Fewer episodes per run and one download at a time keep the
+      # baseline low enough that the spike fits.
+      #
+      # Set here rather than in .env because .env on the NAS is owned by
+      # another account; these are deployment tuning either way, and belong
+      # with the memory limit they exist to stay under.
+      PODAGENT_PIPELINE__MAX_TRANSCRIPTS_PER_RUN: "2"
+      PODAGENT_ASR__DOWNLOAD_CONCURRENCY: "1"
+    volumes:
+      # Replaces the podcast-work named volume from the base file. Same target
+      # path, so this entry supersedes it rather than adding a second mount.
+      - ./work:/data/work
+    networks:
+      internal: {}
+      qnet-static-eth1-dc7e3a:
+        ipv4_address: ${NAS_LAN_IP:-10.0.0.2}
+    deploy:
+      resources:
+        limits:
+          # 3G, not the 2G this started at and not the base file's 4G.
+          #
+          # 2G was chosen on the theory that small.en made ASR cheap. It did
+          # not: the container was cgroup-OOM-killed repeatedly, and `anon-rss`
+          # at each kill was only 460-760 MB — the kill comes from a single
+          # large allocation on top of that baseline, not from slow growth, so
+          # episode length is a poor predictor. One-minute episodes died as
+          # readily as two-hour ones.
+          #
+          # A limit is a ceiling, not a reservation: the agent idles around
+          # 570 MB and this only permits the spike. It stays under the base
+          # file's 4G because the host has ~1.75 GB reclaimable and shares it
+          # with Home Assistant — the failure mode of going too high is a
+          # host-level OOM that takes a neighbour down instead of this.
+          memory: 3G
+          cpus: "2.0"
+
+  couchdb-podcast:
+    environment:
+      TZ: Europe/Stockholm
+    ports:
+      # Loopback on the NAS only — NOT 0.0.0.0. This is what lets the nightly
+      # backup and a one-off `ssh -L` restore reach the database; the LAN still
+      # cannot. Widening this to a LAN interface would undo the single most
+      # important property of the network layout.
+      - "127.0.0.1:5984:5984"
+    volumes:
+      - ./couchdb/data:/opt/couchdb/data
+      - ./couchdb/config:/opt/couchdb/etc/local.d
+
+networks:
+  # Created and owned by Container Station, not by compose — compose only joins
+  # it, and must not try to define its subnet or parent interface.
+  qnet-static-eth1-dc7e3a:
+    external: true

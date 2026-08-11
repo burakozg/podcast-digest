@@ -1,0 +1,405 @@
+# Podcast Digest Agent — non-secret configuration.
+# Secrets belong in .env / environment only (see .env.example).
+# Env vars override these values: PODAGENT_<SECTION>__<KEY> (double underscore
+# nests), e.g. PODAGENT_PIPELINE__DIGEST_THRESHOLD=6.
+#
+# Feed URLs below were each verified to return RSS with audio enclosures.
+# `has_feed_transcripts: true` marks shows observed to publish
+# <podcast:transcript> tags, which lets the pipeline skip ASR entirely.
+
+podcasts:
+  - slug: risky-business
+    backfill_mode: full      # was the default; pinned when it changed to skip
+    name: Risky Business
+    feed_url: https://risky.biz/feeds/risky-business/
+    priority: high
+    always_escalate: true
+    asr_enabled: true          # no published transcript; ASR earns its keep here
+    # Dense news + interviews with thin per-episode notes — always summarize.
+
+  - slug: security-cryptography-whatever
+    backfill_mode: full      # was the default; pinned when it changed to skip
+    name: Security Cryptography Whatever
+    feed_url: https://feeds.buzzsprout.com/1822302.rss
+    priority: high
+    always_escalate: true
+    asr_enabled: true          # no published transcript; ASR earns its keep here
+
+  - slug: cloud-security-google
+    backfill_mode: full      # was the default; pinned when it changed to skip
+    name: Cloud Security Podcast by Google
+    feed_url: https://cloudsecuritypodcast.libsyn.com/rss
+    priority: high
+    always_escalate: true
+    asr_enabled: true          # no published transcript; ASR earns its keep here
+    # NOTE: cloud.withgoogle.com/cloudsecurity/podcast/feed/ also resolves but
+    # ran ~2 months stale at setup time; the Libsyn origin feed is current.
+
+  - slug: microsoft-threat-intelligence
+    backfill_mode: full      # was the default; pinned when it changed to skip
+    name: Microsoft Threat Intelligence Podcast
+    feed_url: https://feeds.megaphone.fm/microsoft-threat-intelligence
+    priority: high
+    always_escalate: true
+    asr_enabled: true          # no published transcript; ASR earns its keep here
+
+  - slug: defenders-advantage
+    backfill_mode: full      # was the default; pinned when it changed to skip
+    name: The Defender's Advantage Podcast
+    feed_url: https://feeds.buzzsprout.com/1762840.rss
+    priority: high
+    always_escalate: true
+    asr_enabled: true          # no published transcript; ASR earns its keep here
+
+  - slug: cyberwire-daily
+    name: CyberWire Daily
+    feed_url: https://feeds.megaphone.fm/cyberwire-daily-podcast
+    priority: med
+    always_escalate: false
+    # Daily/news cadence: stale headlines are not worth a summary (roadmap A1).
+    backfill_mode: tier0_only
+    # High daily volume with good descriptions — Tier-0 does the filtering.
+    # The feed publishes no <podcast:transcript>, but the site does serve one —
+    # on a sibling page to the one the feed links to (…/2594/notes ->
+    # …/2594/transcript). Free, and better than an hour of CPU on a daily show.
+    transcript_selector: ".transcript"
+    transcript_url_sub: ["/notes", "/transcript"]
+
+  - slug: sans-stormcast
+    name: SANS Internet Stormcenter Daily Cyber Security Podcast
+    feed_url: https://isc.sans.edu/dailypodcast.xml
+    priority: med
+    always_escalate: false
+    # Daily/news cadence: stale headlines are not worth a summary (roadmap A1).
+    backfill_mode: tier0_only
+    has_feed_transcripts: true
+
+  - slug: darknet-diaries
+    backfill_mode: full      # was the default; pinned when it changed to skip
+    name: Darknet Diaries
+    feed_url: https://feeds.megaphone.fm/darknetdiaries
+    priority: med
+    always_escalate: false
+    has_feed_transcripts: true
+    # Publishes <podcast:transcript> in-feed, so no show-notes scraping is
+    # needed (resolves design doc §14 open item — transcript_selector unused).
+
+  - slug: ciso-series
+    backfill_mode: full      # was the default; pinned when it changed to skip
+    name: CISO Series Podcast
+    feed_url: https://rss.libsyn.com/shows/24425/destinations/37324.xml
+    priority: med
+    always_escalate: false
+
+  - slug: caveat
+    name: Caveat
+    feed_url: https://feeds.megaphone.fm/caveat
+    priority: med
+    always_escalate: false
+    # Daily/news cadence: stale headlines are not worth a summary (roadmap A1).
+    backfill_mode: tier0_only
+
+  - slug: defensive-security
+    backfill_mode: full      # was the default; pinned when it changed to skip
+    name: Defensive Security Podcast
+    feed_url: https://defensivesecurity.org/feed/podcast/
+    priority: med
+    always_escalate: false
+
+  - slug: unsupervised-learning
+    backfill_mode: full      # was the default; pinned when it changed to skip
+    name: Unsupervised Learning (Daniel Miessler)
+    feed_url: https://omny.fm/shows/unsupervised-learning/playlists/podcast.rss
+    priority: med
+    always_escalate: false
+
+  - slug: smashing-security
+    backfill_mode: full      # was the default; pinned when it changed to skip
+    name: Smashing Security
+    feed_url: https://www.smashingsecurity.com/rss
+    priority: low
+    always_escalate: false
+    # Entertainment-leaning — strict filter via low priority hint.
+
+  - slug: hacking-humans
+    name: Hacking Humans
+    feed_url: https://feeds.megaphone.fm/hacking-humans
+    priority: low
+    always_escalate: false
+    # Daily/news cadence: stale headlines are not worth a summary (roadmap A1).
+    backfill_mode: tier0_only
+
+interest_profile:
+  - key: ot_ics
+    label: OT/ICS security
+    description: >-
+      Industrial control systems, Purdue model, DCS/PLC/SCADA, OT incident
+      response, OT/IT convergence
+    weight: 10
+  - key: ai_agent_security
+    label: AI & agent security governance
+    description: >-
+      LLM/agent security, agentic risk, AI governance frameworks, prompt
+      injection, model supply chain
+    weight: 10
+  - key: microsoft_stack
+    label: Microsoft security ecosystem
+    description: Entra, Purview, Defender, Sentinel, Fabric security
+    weight: 8
+  - key: tprm
+    label: Third-party risk
+    description: TPRM, supply chain risk, vendor assessment
+    weight: 7
+  - key: leadership_policy
+    label: Security leadership, EU policy & regulation
+    description: >-
+      CISO topics, NIS2, CRA, DORA, EU cyber policy, consulting industry
+    weight: 6
+
+scheduler:
+  timezone: Europe/Stockholm
+  ingest_cron: "0 */6 * * *"        # every 6 hours
+  pipeline_cron: "*/30 * * * *"     # every 30 minutes
+  digest_cron: "0 6 * * fri"        # Friday 06:00 local
+  retention_cron: "0 4 * * *"       # daily 04:00 local
+  run_on_startup: false
+
+pipeline:
+  # Tier-0 routing thresholds (§4). The model proposes; these decide.
+  t_conf_high: 7
+  t_rel_low: 4
+  t_rel_high: 7
+  # Tier-1 score at or above which an episode earns a digest slot.
+  digest_threshold: 5
+  # Score at or above which an episode is a "top pick" rather than "also relevant".
+  top_pick_threshold: 8
+  # On a fresh DB, ignore anything published longer ago than this (backfill guard).
+  initial_lookback_days: 14
+  max_retries: 3
+  description_max_chars: 2000
+  # Above this estimated token count, Tier-1 switches to map-reduce.
+  max_input_tokens: 24000
+  chunk_target_tokens: 6000
+  # Safety valves so one run cannot blow up cost or wall time.
+  max_triage_per_run: 60
+  max_transcripts_per_run: 6
+  max_summaries_per_run: 12
+
+llm:
+  # Every tier is provider-agnostic and config-selected. `allow_cloud_fallback:
+  # false` keeps a tier fully on-prem — failures queue instead of leaving the LAN.
+  #
+  # INTERIM — no local model host. Until there is a machine worth running Ollama
+  # on, both tiers run OpenRouter primary with Anthropic behind it. Consequences
+  # worth knowing before editing this section:
+  #
+  #   * PODAGENT_OPENROUTER_API_KEY and PODAGENT_ANTHROPIC_API_KEY are both
+  #     REQUIRED now. Startup refuses to boot rather than run a tier whose
+  #     endpoints it cannot authenticate.
+  #   * `allow_cloud_fallback: false` on either tier would strip every endpoint
+  #     out of the chain and fail validation at startup. That refusal is correct:
+  #     with nothing on-prem there is no local-only mode to fall back to.
+  #   * The Ollama primaries are kept below, commented out, ready to be restored.
+  #     Restoring one is a file edit and cannot be done from the console:
+  #     api_base decides where transcripts are sent, so a new model host takes
+  #     file-level authority by design.
+  log_llm_io: false
+  tiers:
+    tier0:
+      timeout_s: 60
+      validation_retries: 2
+      allow_cloud_fallback: true      # load-bearing: the whole chain is cloud
+      # RESTORE (needs a local model host): uncomment this as `primary:` and
+      # demote the openrouter endpoint below back into `fallbacks:`.
+      # primary:
+      #   provider: ollama
+      #   model: qwen3:8b
+      #   api_base: http://ollama:11434
+      #   temperature: 0.0
+      primary:
+        provider: openrouter
+        # NOT llama-3.3-8b-instruct, which this said until the endpoint was
+        # first actually used: OpenRouter has no such model and answers
+        # 404 "No endpoints found". It sat here harmlessly for months as a
+        # fallback that a local-only tier could never reach. Check an id against
+        # https://openrouter.ai/api/v1/models before putting it in a chain.
+        model: meta-llama/llama-3.1-8b-instruct
+        temperature: 0.0
+        # Left unset, the provider's own default truncated replies mid-JSON:
+        # the call is billed, the answer is unusable, and the tier falls back.
+        max_tokens: 900
+      fallbacks:
+        # Second vendor rather than a second model at the same one: what this
+        # protects against is OpenRouter itself being down or rejecting the key,
+        # which no OpenRouter model survives.
+        #
+        # Haiku 4.5 deliberately, not a current Sonnet/Opus: the pipeline sends
+        # `temperature` on every call, and Anthropic's newer models reject a
+        # non-default temperature with a 400 — a fallback that fails closed the
+        # first time it is ever needed. See the tier1 note.
+        - provider: anthropic
+          model: claude-haiku-4-5
+          temperature: 0.0
+          max_tokens: 900
+    tier1:
+      timeout_s: 300
+      validation_retries: 2
+      allow_cloud_fallback: true      # load-bearing: the whole chain is cloud
+      # RESTORE: see tier0.
+      # primary:
+      #   provider: ollama
+      #   model: qwen3:32b
+      #   api_base: http://ollama:11434
+      #   temperature: 0.2
+      primary:
+        provider: openrouter
+        model: qwen/qwen3-32b
+        temperature: 0.2
+        # See tier0; a summary needs more room than a triage verdict.
+        max_tokens: 2000
+      fallbacks:
+        # Sonnet 4.6 rather than Sonnet 5, for two reasons that are both about
+        # this codebase rather than the models:
+        #   * `temperature` is sent unconditionally (llm/client.py), and Sonnet 5
+        #     rejects a non-default value outright.
+        #   * Sonnet 5 thinks by default, and thinking tokens count against
+        #     max_tokens — a 2000-token budget would be spent reasoning and
+        #     return a truncated summary.
+        # Moving to Sonnet 5 means making temperature omittable, passing
+        # `thinking: {type: disabled}` through extra_params, and raising
+        # max_tokens. Worth doing on purpose, not as part of a fallback.
+        - provider: anthropic
+          model: claude-sonnet-4-6
+          temperature: 0.2
+          max_tokens: 2000
+
+asr:
+  backend: local              # local | remote (remote is interface-only in v1)
+  model: large-v3-turbo
+  compute_type: int8
+  device: cpu
+  language: en
+  beam_size: 1
+  max_audio_mb: 300
+  keep_audio: false
+  asr_concurrency: 1          # never more than 1 on the NAS
+  download_concurrency: 2
+  remote_url: null
+
+output:
+  digest_dir: /data/digests
+  work_dir: /data/work
+  episode_notes: false
+
+couchdb:
+  url: http://couchdb-podcast:5984
+  db: podcast_agent
+  user: podagent
+
+api:
+  host: 0.0.0.0               # bound to the container's macvlan LAN IP only
+  port: 8080
+
+logging:
+  level: INFO
+  format: json                # json | console
+
+retention:
+  # 0 keeps transcripts indefinitely. They are the corpus: entity timelines and
+  # any retrieval over the archive reach back exactly as far as the transcripts
+  # still exist. At ~14 KB gzipped an episode, the whole archive is tens of MB.
+  transcript_days: 0
+  llm_call_days: 365
+
+security:
+  # Enclosure/transcript URLs must share the feed's registrable domain or be on
+  # this allowlist. Set enforce_domain_allowlist: false to disable (not advised).
+  enforce_domain_allowlist: true
+  cdn_allowlist:
+    # Hosts / analytics prefixers observed serving the configured shows' audio and
+    # transcripts. Verified empirically against all 14 feeds at setup — the first
+    # six below are load-bearing: without them, enclosures or transcripts for
+    # CyberWire, Caveat, Hacking Humans, Darknet Diaries, Unsupervised Learning
+    # and Smashing Security are rejected.
+    - pdst.fm            # Podsights prefix — CyberWire / Caveat / Hacking Humans audio
+    - prxu.org           # PRX — Darknet Diaries transcripts and audio
+    - mgln.ai            # Megaphone prefix — Unsupervised Learning audio
+    - redcircle.com      # Smashing Security audio
+    - podtrac.com        # Risky Business / Darknet Diaries prefix
+    - blubrry.com        # Defensive Security audio
+    # Outermost prefix of a swap.fm -> mgln.ai -> podtrac -> prxu.org chain
+    # whose inner three are already here. Without it every Click Here
+    # enclosure is rejected, and a rejected enclosure discards the whole
+    # episode — so the show ingested nothing at all.
+    - swap.fm            # Click Here audio
+    # Mid-chain prefixers. Neither is ever the URL a feed publishes — they are
+    # reached by redirect from pdst.fm and mgln.ai — so they only became
+    # necessary once every hop started being checked rather than only the first.
+    # Without them the four shows below download nothing.
+    - pdrl.fm            # CyberWire Daily, Caveat, Hacking Humans audio
+    - pscrb.fm           # Podscribe prefix — Unsupervised Learning audio
+    # CyberWire publishes its own transcripts, but the feed is on megaphone.fm,
+    # so the publisher's own site is a different registrable domain and the
+    # scrape is refused without this. Text only, under the download cap.
+    - thecyberwire.com   # CyberWire Daily transcripts (scraped)
+    # NOTE: broad. Needed for Smashing Security transcripts (S3-hosted). Content
+    # from here is only ever parsed as text under the max_text_download_mb cap.
+    - amazonaws.com
+    - megaphone.fm
+    - libsyn.com
+    - buzzsprout.com
+    - omny.fm
+    - omnycontent.com
+    - sans.edu
+    - risky.biz
+    - smashingsecurity.com
+    # Common hosts for shows you may add later.
+    - simplecastaudio.com
+    - simplecast.com
+    - art19.com
+    - acast.com
+    - anchor.fm
+    - spreaker.com
+    - captivate.fm
+    - transistor.fm
+    - fireside.fm
+    - pinecast.com
+    - cloudfront.net
+    - akamaized.net
+    # Hosts for the shows added in August 2026. Each chain below was resolved
+    # end to end before being listed — every hop is checked, not just the one
+    # the feed publishes, and a rejected enclosure discards the whole episode
+    # rather than degrading it. 31 of 36 queued episodes were being dropped for
+    # want of these.
+    #
+    #   feeds.soundcloud.com  -302->  cf-media.sndcdn.com
+    - soundcloud.com     # Cybercrime Magazine audio (the published URL)
+    - sndcdn.com         # ...and where it redirects to
+    #
+    #   api.riverside.com  -302->  hosting-media.riverside.com
+    #   (one entry covers both — same registrable domain)
+    - riverside.com      # The Blind Spot audio
+    #
+    #   content.rss.com  -307->  rsscom.pdn.tritondigital.com
+    - rss.com            # CISO Tradecraft audio (the published URL)
+    - tritondigital.com  # ...and the CDN it lands on
+
+notifications:
+  # Push only for exceptional episodes (roadmap E4). Off until you point it at
+  # an ntfy server. The threshold is deliberately strict: at 9+ this fires a
+  # handful of times a year, which is what keeps it worth reading.
+  enabled: false
+  ntfy_url: null          # e.g. http://ntfy.lan:8080
+  topic: null             # e.g. podcast-digest-alerts
+  min_score: 9
+  priority: default
+  tags: [headphones]
+
+backfill:
+  # Deliberate archive walk (roadmap A1). Never touches the weekly digest.
+  months: 12
+  digest_threshold: 7        # stricter than the weekly 5 — old episodes must earn it
+  months_per_run: 1
+  max_episodes_per_run: 200
+  max_summaries_per_run: 20
+  max_transcripts_per_run: 6   # its own valve — acquisition may transcribe locally

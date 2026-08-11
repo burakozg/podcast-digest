@@ -1,0 +1,104 @@
+[project]
+name = "podcast-agent"
+version = "1.0.0"
+description = "Self-hosted agent that triages cybersecurity podcasts and delivers Markdown digests"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "MIT" }
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "pyyaml>=6.0",
+    "httpx>=0.27",
+    "feedparser>=6.0.11",
+    "structlog>=24.4",
+    "apscheduler>=3.10,<4",
+    "jinja2>=3.1",
+    # Renders digest Markdown for the console. Present transitively via
+    # litellm, but declared because this project imports it directly.
+    "markdown-it-py>=3",
+    "litellm>=1.55",
+    "instructor>=1.7",
+    "bleach>=6.2",
+    "defusedxml>=0.7",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.3",
+    "tldextract>=5.1",
+    "tenacity>=9.0",
+]
+
+[project.optional-dependencies]
+# faster-whisper pulls ctranslate2 + model weights; kept optional so tests and
+# local dev do not need it. The container image installs `.[asr]`.
+asr = ["faster-whisper>=1.1"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "respx>=0.21",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "types-bleach",
+    "types-defusedxml",
+    "types-pyyaml",
+]
+
+[project.scripts]
+podcast-agent = "podcast_agent.main:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["podcast_agent"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+# The design and roadmap documents contain illustrative Python. Formatting it
+# rewraps schema definitions whose aligned trailing comments are the point, and
+# the result is a diff in a document nobody edited.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC", "S", "RUF"]
+ignore = [
+    "S101",     # assert is fine in tests and internal invariants
+    "B008",     # FastAPI Depends() in defaults is idiomatic
+    "SIM108",   # ternary rewrites hurt readability here
+    # Blocking pathlib calls in async code. Deliberate: the only filesystem work
+    # is small local writes (digest files, audio chunks) on a single-user service,
+    # and adding anyio just to await mkdir() would be pure ceremony.
+    "ASYNC240",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = [
+    "feedparser.*",
+    "litellm.*",
+    "instructor.*",
+    "bleach.*",
+    "faster_whisper.*",
+    "apscheduler.*",
+    "tldextract.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

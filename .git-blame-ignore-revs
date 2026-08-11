@@ -1,0 +1,11 @@
+# Commits that only moved code, never changed it. `git blame` skips these, so a
+# line still shows the commit that wrote it rather than the one that rewrapped
+# it. Enabled locally with:
+#
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# Each entry must be a formatting-only commit — one that also changed behaviour
+# would hide that behaviour change from blame, which is the opposite of the point.
+
+# Format the repository with ruff, and nothing else
+68997c2abe632824b8eedee7ea11451445dc9c8d

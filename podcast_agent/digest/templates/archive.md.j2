@@ -1,0 +1,71 @@
+{# Same whitespace convention as digest.md.j2: lone plain {% %} tags only. #}
+---
+type: podcast-archive
+podcast: {{ podcast_name }}
+month: {{ month }}
+generated: {{ generated_local }}
+episodes_scanned: {{ stats.scanned }}
+episodes_summarized: {{ stats.summarized }}
+tags: [podcast-archive, cybersecurity]
+---
+
+# {{ podcast_name }} — {{ month_label }}
+
+*Archive backfill · {{ stats.scanned }} episode{{ '' if stats.scanned == 1 else 's' }} scanned · {{ stats.summarized }} summarised*
+
+> Older material, summarised after the fact. Claims are as of the publication
+> date shown on each entry, not the present.
+
+{% if summarized %}
+## Worth reading
+
+{% for e in summarized %}
+### {{ e.title }}  `{{ e.score }}/10`
+
+*{{ e.published_date }} · {{ e.duration }} · basis: {{ e.basis_label }}{% if e.link %} · [episode link]({{ e.link }}){% endif %}*
+
+**Why it matters:** {{ e.why_it_matters }}
+
+{{ e.summary_md }}
+
+{% if e.key_takeaways %}
+**Key takeaways:**
+
+{% for bullet in e.key_takeaways %}
+- {{ bullet }}
+{% endfor %}
+
+{% endif %}
+{% if e.interests %}
+**Interests matched:** {{ e.interests | join(' · ') }}
+
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if listed %}
+## Indexed only
+
+Judged from the description; not summarised.
+
+{% for e in listed %}
+- **{{ e.published_date }}** — {{ e.title }}{% if e.link %} ([link]({{ e.link }})){% endif %} · `~{{ e.score }}/10`
+{% endfor %}
+
+{% endif %}
+{% if everything_else %}
+## Set aside
+
+<details>
+<summary>{{ everything_else | length }} episode{{ '' if everything_else | length == 1 else 's' }}</summary>
+
+| Date | Episode | Score | Outcome |
+|---|---|---:|---|
+{% for e in everything_else %}
+| {{ e.published_date }} | {{ e.title }} | {{ e.score_display }} | {{ e.outcome }} |
+{% endfor %}
+
+</details>
+
+{% endif %}
+---
+*Archive backfill by podcast-digest-agent. Scored against interest profile `{{ profile_version }}` at threshold {{ threshold }}.*

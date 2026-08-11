@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Historical intake · Digest Agent</title>
+<!--
+  Archive backfill (roadmap A1). On its own page because it is a long-running,
+  opt-in operation with its own economics — mixing it into the operations
+  console put a switch that can consume days of compute next to buttons that
+  take seconds.
+
+  Same posture as the other consoles: self-contained, no external requests,
+  inert shell, key supplied by the browser.
+-->
+<style>
+  :root {
+    --bg: #fbfbfa; --panel: #fff; --ink: #1a1a18; --muted: #6b6b66;
+    --line: #e4e4e0; --accent: #2f5d50; --warn: #8a5a00; --bad: #a3352b;
+    --good: #2f6b3a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a; --panel: #1e2024; --ink: #e8e8e4; --muted: #9a9a94;
+      --line: #2e3138; --accent: #7fbfa8; --warn: #d0a24c; --bad: #e0796b;
+      --good: #7fbf8f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+    padding: 1rem 1.25rem; border-bottom: 1px solid var(--line); background: var(--panel);
+    position: sticky; top: 0; z-index: 5;
+  }
+  h1 { font-size: 1.05rem; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  a { color: var(--accent); }
+  main { padding: 1.25rem; max-width: 1100px; margin: 0 auto; display: grid; gap: 1rem; }
+  .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  section {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1rem;
+  }
+  h2 { font-size: .78rem; text-transform: uppercase; letter-spacing: .07em;
+       color: var(--muted); margin: 0 0 .75rem; font-weight: 650; }
+  .stat { font-size: 1.7rem; font-weight: 640; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); font-size: .84rem; }
+  .row { display: flex; justify-content: space-between; gap: .75rem; padding: .3rem 0;
+         border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .row span:last-child { font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-size: .87rem; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: .35rem .5rem;
+       border-bottom: 1px solid var(--line); font-size: .78rem; }
+  td { padding: .35rem .5rem; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: 0; }
+  .scroll { overflow-x: auto; }
+  button {
+    font: inherit; font-size: .88rem; padding: .45rem .85rem; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  .controls { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+  .pill { font-size: .74rem; padding: .12rem .5rem; border-radius: 999px;
+          border: 1px solid var(--line); color: var(--muted); }
+  .pill.on { color: var(--good); border-color: currentColor; }
+  .pill.off { color: var(--warn); border-color: currentColor; }
+  .pill.bad { color: var(--bad); border-color: currentColor; }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: .4rem; }
+  .bar > div { height: 100%; background: var(--accent); }
+  pre { margin: 0; font-size: .8rem; white-space: pre-wrap; word-break: break-word;
+        color: var(--muted); max-height: 220px; overflow: auto; }
+  #msg { padding: .5rem .75rem; border-radius: 7px; font-size: .85rem; display: none; }
+  #msg.show { display: block; }
+  #msg.err { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
+  #msg.ok { background: color-mix(in srgb, var(--good) 12%, transparent); color: var(--good); }
+  #gate { padding: 2rem 1.25rem; max-width: 420px; margin: 3rem auto; }
+  select, input[type=search] {
+    font: inherit; font-size: .88rem; padding: .4rem .55rem; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  }
+  .filters { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-bottom: .8rem; }
+  tr.ep { cursor: pointer; }
+  tr.ep:hover td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  tr.ep.sel td { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  .yes { color: var(--good); font-weight: 600; }
+  .no { color: var(--muted); }
+  .basis { font-size: .74rem; color: var(--muted); }
+  #drawer {
+    position: fixed; inset: 0 0 0 auto; width: min(640px, 100%); background: var(--panel);
+    border-left: 1px solid var(--line); padding: 1.25rem; overflow-y: auto; z-index: 20;
+    box-shadow: -12px 0 40px rgba(0,0,0,.18);
+  }
+  #drawer[hidden] { display: none; }
+  #drawer h3 { margin: .2rem 0 .3rem; font-size: 1.05rem; line-height: 1.35; }
+  #drawer .summary { white-space: pre-wrap; margin-top: .8rem; }
+  #drawer ul { margin: .4rem 0 0; padding-left: 1.1rem; }
+  .closebar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+  input[type=password] {
+    font: inherit; width: 100%; padding: .5rem .65rem; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink); margin: .5rem 0;
+  }
+</style>
+</head>
+<body>
+
+<div id="gate" hidden>
+  <h1>Historical intake</h1>
+  <p class="sub">Enter the admin API key. Kept in this tab only.</p>
+  <input type="password" id="key" placeholder="API key">
+  <button class="primary" id="unlock">Unlock</button>
+  <p class="sub" id="gateErr" style="color:var(--bad)"></p>
+</div>
+
+<div id="app" hidden>
+<!--NAV-->
+<header>
+  <h1>Historical intake</h1>
+  <span class="pill" id="tick"></span>
+  <span style="flex:1"></span>
+  <button id="forget">Forget key</button>
+</header>
+
+<main>
+  <div id="msg"></div>
+
+  <section>
+    <h2>State</h2>
+    <div style="display:flex;gap:1.5rem;flex-wrap:wrap;align-items:flex-start">
+      <div style="min-width:200px">
+        <div class="stat" id="bfState">–</div>
+        <div class="sub" id="bfWindow">–</div>
+        <div class="bar"><div id="bfBar" style="width:0%"></div></div>
+        <div class="sub" id="bfProgress" style="margin-top:.35rem">–</div>
+      </div>
+      <div style="flex:1;min-width:260px">
+        <div class="row"><span>Episodes ingested</span><span id="bfEpisodes">–</span></div>
+        <div class="row"><span>Archive files written</span><span id="bfFiles">–</span></div>
+        <div class="row"><span>Podcasts finished</span><span id="bfComplete">–</span></div>
+        <div class="row"><span>Archive threshold</span><span id="bfThreshold">–</span></div>
+      </div>
+    </div>
+
+    <div class="controls" style="margin-top:1rem">
+      <button id="bfStart" class="primary">Start</button>
+      <button id="bfPause">Pause</button>
+      <button data-run="backfill-dry">Dry run (estimate)</button>
+      <button data-run="backfill-once">Run one window now</button>
+      <button id="bfRewind">Re-walk archive</button>
+    </div>
+
+    <p class="sub" style="margin:.7rem 0 0">
+      <strong>Start</strong> enables the scheduled walk, which advances one
+      month-window per podcast every 20 minutes until the window is exhausted.
+      <strong>Pause</strong> takes effect at the next episode — the one in flight
+      finishes first, so nothing is left half-written. It stops more than the next
+      round: archive episodes already ingested are only ever advanced by a
+      backfill run, so while paused they sit untouched rather than draining. A
+      manual run still works while paused.
+    </p>
+    <p class="sub" style="margin:.4rem 0 0">
+      <strong>Recent episodes always go first.</strong> While anything from
+      routine intake is still moving through the pipeline, the walk does not
+      start, and a walk already running hands back at its next episode. That
+      includes an episode waiting on local transcription, even though an archive
+      month of transcript-only episodes would finish far sooner — the ordering
+      is recency, not speed. It resumes on its own; nothing needs restarting.
+    </p>
+    <p class="sub" style="margin:.4rem 0 0">
+      <strong>Re-walk archive</strong> clears the cursors so the window is read
+      again from the start. The walk only ever moves backwards, so a month it has
+      already passed is otherwise unreachable — which matters after a change to
+      what the walk collects. Nothing is deleted; only episodes that were never
+      recorded are added.
+    </p>
+    <p class="sub" style="margin:.4rem 0 0">
+      Always dry-run first. The estimate is built from this deployment's own
+      recorded latencies, not generic guesses. Every archive episode is recorded
+      and triaged; whether one is summarised depends on the podcast having a
+      transcript to work from — published, or made by
+      <a href="/admin/podcasts">transcribing locally</a> — so the estimate
+      separates the two.
+    </p>
+    <p class="sub" style="margin:.4rem 0 0">
+      <strong>How far back</strong> is set per podcast, in the History column on
+      the <a href="/admin/podcasts">Podcasts</a> page — every podcast starts at
+      12 months and can be raised to 24 or 36 individually, because an evergreen
+      interview podcast can repay three years where a daily news round-up does
+      not repay one. Widening only adds months: the walk resumes where it
+      stopped, nothing restarts, and narrowing deletes nothing already collected.
+      It takes effect at the next run. Dry-run again after changing it.
+    </p>
+  </section>
+
+  <section>
+    <div id="bfWaiting" style="margin:0 0 .8rem"></div>
+    <h2>Per-podcast progress</h2>
+    <div class="scroll">
+      <table><thead><tr>
+        <th>Podcast</th><th>Mode</th><th>History</th><th>Next month</th><th>Status</th>
+      </tr></thead><tbody id="bfRows"></tbody></table>
+    </div>
+    <p class="sub" style="margin:.7rem 0 0">
+      The cursor walks backwards; "next month" is where this podcast resumes.
+      <strong>Triage only</strong> podcasts are judged but never summarised —
+      right for daily news, where a two-year-old round-up earns an index line
+      rather than minutes of model time. Change a podcast's mode on the
+      <a href="/admin/podcasts">Podcasts</a> page.
+    </p>
+  </section>
+
+  <section>
+    <h2>Last response</h2>
+    <pre id="raw">Run a dry run to see the cost estimate here.</pre>
+  </section>
+</main>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const KEY_NAME = "podagent_key";
+  const $ = (id) => document.getElementById(id);
+  let timer = null;
+
+  const key = () => sessionStorage.getItem(KEY_NAME) || "";
+
+  async function api(path, options = {}) {
+    const res = await fetch(path, {
+      ...options,
+      headers: { "X-API-Key": key(), ...(options.headers || {}) },
+    });
+    if (res.status === 401) { lock("Key rejected."); throw new Error("unauthorised"); }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const d = body.detail;
+      throw new Error(typeof d === "string" ? d : JSON.stringify(d || `HTTP ${res.status}`));
+    }
+    return body;
+  }
+
+  function say(text, kind = "ok") {
+    const el = $("msg");
+    el.textContent = text;
+    el.className = `show ${kind}`;
+    if (kind === "ok") setTimeout(() => { el.className = ""; }, 6000);
+  }
+
+  const num = (v) => (v === null || v === undefined ? "–" : v);
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+  function monthsBetween(a, b) {
+    if (!a || !b) return -1;
+    const [ay, am] = a.split("-").map(Number);
+    const [by, bm] = b.split("-").map(Number);
+    return (ay - by) * 12 + (am - bm);
+  }
+
+  // Stored values are what config.yaml holds; these are what they mean. Same
+  // mapping as the Podcasts page, so one podcast reads the same on both.
+  const ARCHIVE_MODES = {
+    full: "summarise",
+    tier0_only: "triage only",
+    skip: "skip",
+  };
+
+  function renderWaiting(waiting, paused) {
+    const box = $("bfWaiting");
+    if (paused || !waiting.blocked) { box.innerHTML = ""; return; }
+    const rows = (waiting.episodes || []).map((e) =>
+      `<li>${esc(e.title || e.episode_id)}
+        <span class="sub">${esc(e.podcast_slug)} · ${esc(e.next_step || e.status)}</span></li>`
+    ).join("");
+    box.innerHTML =
+      `<p class="sub" style="margin:0 0 .4rem"><strong>${esc(waiting.pending)}</strong> recent
+        ${waiting.pending === 1 ? "episode is" : "episodes are"} still in the pipeline.
+        History resumes on its own once they finish — a fresh episode queued for
+        local transcription outranks the whole archive, however fast the archive
+        items would be.</p><ul style="margin:.2rem 0 0;padding-left:1.1rem">${rows}</ul>`;
+  }
+
+  function render(status) {
+    const bf = status.backfill || {};
+    const control = bf.control || {};
+    const running = (status.jobs_running || {}).backfill;
+    const paused = control.paused !== false;
+    const waiting = bf.waiting_on_recent || {};
+
+    // "Waiting" is not "Paused" and not "Idle" — without saying so, a started
+    // walk that is deferring to fresh episodes looks like a broken one.
+    $("bfState").textContent = running ? "Running"
+      : paused ? "Paused"
+      : waiting.blocked ? "Waiting for recent episodes"
+      : "Idle";
+    $("bfState").style.color = running ? "var(--good)"
+      : paused || waiting.blocked ? "var(--warn)" : "";
+    renderWaiting(waiting, paused);
+    $("bfWindow").textContent =
+      `default ${num(bf.window_months_default)} months · furthest reach ${
+        bf.oldest_month_targeted || "–"}`;
+    $("bfEpisodes").textContent = num(bf.episodes_ingested);
+    $("bfFiles").textContent = num(bf.archive_files);
+    $("bfComplete").textContent = `${num(bf.shows_complete)} / ${num(bf.shows_eligible)}`;
+    $("bfThreshold").textContent = `${num(bf.digest_threshold)}/10`;
+    $("bfStart").disabled = !paused;
+    $("bfPause").disabled = paused;
+
+    const cursors = bf.cursors || {};
+    const months = Math.max(1, bf.window_months || 12);
+    const shows = Object.keys(cursors);
+    let walked = 0;
+    for (const slug of shows) {
+      const cursor = cursors[slug];
+      if (!cursor) continue;
+      const left = monthsBetween(cursor, bf.oldest_month_targeted);
+      walked += left >= 0 ? months - left : months;
+    }
+    const pct = shows.length ? Math.min(100, (walked / (shows.length * months)) * 100) : 0;
+    $("bfBar").style.width = `${pct.toFixed(1)}%`;
+    $("bfProgress").textContent =
+      `${pct.toFixed(0)}% of the window walked · ${num(bf.shows_not_started)} not started`;
+
+    // Named, because a podcast is chosen by its name and a slug is an
+    // implementation detail. It stays available underneath for anyone matching
+    // a row against a log line.
+    $("bfRows").innerHTML = (bf.podcasts || []).map((p) => {
+      const state = p.complete ? `<span class="pill on">done</span>`
+        : p.cursor ? "in progress" : `<span class="pill">not started</span>`;
+      return `<tr>
+        <td><strong>${esc(p.name || p.slug)}</strong><div class="sub">${esc(p.slug)}</div></td>
+        <td title="${esc(p.mode || "full")}">${esc(ARCHIVE_MODES[p.mode] || p.mode || "summarise")}</td>
+        <td title="reaches back to ${esc(p.oldest_month_targeted || "–")}">${
+          esc(p.months || "–")} mo${p.months_overridden ? "" : `<div class="sub">default</div>`}</td>
+        <td>${esc(p.cursor || "–")}</td>
+        <td>${state}</td></tr>`;
+    }).join("") || `<tr><td colspan="5" class="sub">No podcasts.</td></tr>`;
+
+    $("tick").textContent = `updated ${new Date().toLocaleTimeString()}`;
+  }
+
+  async function rewind() {
+    if (!confirm(
+      "Walk the whole archive window again?\n\n" +
+      "Cursors are cleared, so months already passed are re-read. Nothing is " +
+      "deleted — existing episodes, summaries and digest entries are untouched, " +
+      "and only episodes that were never recorded get added.\n\n" +
+      "This queues hours of local work. Dry-run first if you want the estimate."
+    )) return;
+    await post("/api/v1/backfill/rewind?confirm=true", "Re-walk archive");
+  }
+
+  async function refresh() {
+    try { render(await api("/api/v1/status")); }
+    catch (err) { if (err.message !== "unauthorised") say(err.message, "err"); }
+  }
+
+  async function post(path, label) {
+    const buttons = document.querySelectorAll("button");
+    buttons.forEach((b) => (b.disabled = true));
+    say(`${label}…`);
+    try {
+      const body = await api(path, { method: "POST" });
+      $("raw").textContent = JSON.stringify(body, null, 2);
+      say(`${label} finished.`);
+    } catch (err) {
+      $("raw").textContent = String(err.message);
+      say(`${label} failed: ${err.message}`, "err");
+    } finally {
+      buttons.forEach((b) => (b.disabled = false));
+      refresh();
+    }
+  }
+
+  const ACTIONS = {
+    "backfill-dry": ["/api/v1/runs/backfill?dry_run=true", "Backfill estimate"],
+    "backfill-once": ["/api/v1/runs/backfill?dry_run=false&confirm=true", "Backfill window"],
+  };
+
+  document.querySelectorAll("[data-run]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const [path, label] = ACTIONS[btn.dataset.run];
+      if (btn.dataset.run === "backfill-once" &&
+          !confirm("Run one archive window now? This uses the local LLM for a while.")) return;
+      post(path, label);
+    }));
+  $("bfRewind").addEventListener("click", rewind);
+  $("bfStart").addEventListener("click", () =>
+    post("/api/v1/backfill/control?paused=false&note=started+from+console", "Start intake"));
+  $("bfPause").addEventListener("click", () =>
+    post("/api/v1/backfill/control?paused=true&note=paused+from+console", "Pause intake"));
+  $("forget").addEventListener("click", () => lock("Key cleared."));
+  $("unlock").addEventListener("click", unlock);
+  $("key").addEventListener("keydown", (e) => { if (e.key === "Enter") unlock(); });
+
+  async function unlock() {
+    const value = $("key").value.trim();
+    if (!value) return;
+    sessionStorage.setItem(KEY_NAME, value);
+    try { await api("/api/v1/status"); start(); }
+    catch { sessionStorage.removeItem(KEY_NAME); $("gateErr").textContent = "That key was rejected."; }
+  }
+
+  function lock(reason) {
+    sessionStorage.removeItem(KEY_NAME);
+    if (timer) { clearInterval(timer); timer = null; }
+    $("app").hidden = true; $("gate").hidden = false;
+    $("gateErr").textContent = reason || "";
+  }
+
+  function start() {
+    $("gate").hidden = true; $("app").hidden = false;
+    refresh();
+    if (!timer) timer = setInterval(refresh, 5000);
+  }
+
+  if (key()) start(); else $("gate").hidden = false;
+})();
+</script>
+</body>
+</html>

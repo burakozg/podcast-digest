@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Podcasts · Digest Agent</title>
+<!--
+  Podcast management (companion to /admin). Same posture: one self-contained file,
+  no external requests, inert shell, key supplied by the browser.
+
+  config.yaml stays the declared baseline. Anything changed here is stored as an
+  override in the database and marked as such, so "why does this differ from the
+  file?" is always answerable.
+-->
+<style>
+  :root {
+    --bg: #fbfbfa; --panel: #fff; --ink: #1a1a18; --muted: #6b6b66;
+    --line: #e4e4e0; --accent: #2f5d50; --warn: #8a5a00; --bad: #a3352b; --good: #2f6b3a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a; --panel: #1e2024; --ink: #e8e8e4; --muted: #9a9a94;
+      --line: #2e3138; --accent: #7fbfa8; --warn: #d0a24c; --bad: #e0796b; --good: #7fbf8f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+           padding: 1rem 1.25rem; border-bottom: 1px solid var(--line);
+           background: var(--panel); position: sticky; top: 0; z-index: 5; }
+  h1 { font-size: 1.05rem; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  a { color: var(--accent); }
+  main { padding: 1.25rem; max-width: 1180px; margin: 0 auto; display: grid; gap: 1rem; }
+  section { background: var(--panel); border: 1px solid var(--line);
+            border-radius: 10px; padding: 1rem; }
+  h2 { font-size: .78rem; text-transform: uppercase; letter-spacing: .07em;
+       color: var(--muted); margin: 0 0 .75rem; font-weight: 650; }
+  table { width: 100%; border-collapse: collapse; font-size: .87rem; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: .4rem .5rem;
+       border-bottom: 1px solid var(--line); font-size: .78rem; white-space: nowrap; }
+  td { padding: .45rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  tr.off td { opacity: .5; }
+  .scroll { overflow-x: auto; }
+  button { font: inherit; font-size: .85rem; padding: .35rem .7rem; border-radius: 7px;
+           border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+           cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  select, input { font: inherit; font-size: .85rem; padding: .35rem .5rem; border-radius: 7px;
+                  border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  input[type=password] { width: 100%; margin: .5rem 0; }
+  .pill { font-size: .72rem; padding: .1rem .45rem; border-radius: 999px;
+          border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .pill.on { color: var(--good); border-color: currentColor; }
+  .pill.off { color: var(--warn); border-color: currentColor; }
+  .pill.bad { color: var(--bad); border-color: currentColor; }
+  .sub { color: var(--muted); font-size: .82rem; }
+  .ovr { border-bottom: 1px dotted var(--warn); }
+  /* The name column carries the podcast's own blurb, which can run long. Capped
+     in width so it cannot squeeze the settings columns, and clamped to three
+     lines so one verbose feed cannot make its row tower over the rest. The full
+     text stays available as a tooltip. */
+  .podcell { min-width: 15rem; max-width: 24rem; }
+  .blurb { color: var(--muted); font-size: .82rem; margin: .2rem 0 .15rem;
+           display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+           line-clamp: 3; overflow: hidden; }
+  #msg { padding: .5rem .75rem; border-radius: 7px; font-size: .85rem; display: none; }
+  #msg.show { display: block; }
+  #msg.err { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
+  #msg.ok { background: color-mix(in srgb, var(--good) 12%, transparent); color: var(--good); }
+  #gate { padding: 2rem 1.25rem; max-width: 420px; margin: 3rem auto; }
+  .addgrid { display: grid; gap: .6rem; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+  fieldset { border: 1px solid var(--line); border-radius: 8px; padding: .75rem; }
+  legend { font-size: .78rem; color: var(--muted); padding: 0 .35rem; }
+</style>
+</head>
+<body>
+
+<div id="gate" hidden>
+  <h1>Podcasts</h1>
+  <p class="sub">Enter the admin API key. Kept in this tab only.</p>
+  <input type="password" id="key" placeholder="API key">
+  <button class="primary" id="unlock">Unlock</button>
+  <p class="sub" id="gateErr" style="color:var(--bad)"></p>
+</div>
+
+<div id="app" hidden>
+<!--NAV-->
+<header>
+  <h1>Podcasts</h1>
+  <span class="pill" id="count"></span>
+  <span style="flex:1"></span>
+  <button id="reload">Refresh</button>
+  <button id="forget">Forget key</button>
+</header>
+
+<main>
+  <div id="msg"></div>
+
+  <section>
+    <h2>Podcasts</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>Podcast</th><th>Transcripts</th><th>Priority</th><th>Always<br>escalate</th><th>Transcribe<br>locally</th>
+          <th>Archive<br>mode</th><th>History</th><th>Episodes</th><th>Feed health</th><th>Intake</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>What the columns mean</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Column</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Podcast</strong></td>
+              <td>Name, slug, and the podcast's own description taken from its
+                  feed at the last poll — so it follows the feed rather than
+                  needing to be maintained here. Beneath it, how often it
+                  publishes and whether it ships its own transcripts.</td></tr>
+          <tr><td><strong>Transcripts</strong></td>
+              <td>How many of the last 25 episodes <em>in the feed</em> publish a
+                  transcript — measured at each poll, not declared in config. The
+                  line beneath says what that means <em>given whether this podcast is
+                  transcribed locally</em>, because the two together decide what a summary is
+                  actually built from. A podcast that publishes transcripts and also has local
+                  transcription on is not misconfigured: acquisition tries the
+                  published transcript first and only falls back to transcribing,
+                  so it simply never gets that far. The row worth acting on is <strong>none</strong> with local
+                  transcription off — those summaries come from descriptions alone.</td></tr>
+          <tr><td><strong>Cadence</strong></td>
+              <td>Median gap between recent episodes, measured rather than
+                  declared — a weekly podcast that slips to fortnightly says so
+                  within a month or two. Read from the feed where possible,
+                  falling back to the episodes held. Hover for the measurement.
+                  Needs 3 dated episodes before it will guess.</td></tr>
+          <tr><td><strong>Priority</strong></td>
+              <td>A hint passed to the triage prompt, not a hard filter. It
+                  colours how the model reads a thin description; it does not
+                  guarantee or prevent anything.</td></tr>
+          <tr><td><strong>Always escalate</strong></td>
+              <td>Every episode gets the full treatment regardless of the triage
+                  verdict — for podcasts where you would rather pay than miss
+                  something.</td></tr>
+          <tr><td><strong>Transcribe locally</strong></td>
+              <td>A <em>fallback</em>, not a mode. Acquisition always tries the
+                  published transcript first, then a configured scrape, and only
+                  then transcribes the audio itself — so turning it on for a
+                  podcast that publishes transcripts costs nothing, because it is
+                  never reached.
+                  <strong>On</strong>: the audio is downloaded and transcribed on
+                  this machine when the podcast publishes no transcript —
+                  accurate but slow.
+                  <strong>Off</strong>: a published transcript is used if one
+                  exists, otherwise the episode is summarised from its description
+                  and labelled <code>description only</code>. Governs the weekly
+                  pipeline.</td></tr>
+          <tr><td><strong>Archive mode</strong></td>
+              <td>How the <a href="/admin/backfill">historical intake</a> walk
+                  treats this podcast. <strong>No effect on weekly digests</strong> —
+                  see the three values below. (<code>backfill_mode</code> in
+                  <code>config.yaml</code>.)</td></tr>
+          <tr><td><strong>History</strong></td>
+              <td>How far back <a href="/admin/backfill">historical intake</a>
+                  reaches for <em>this</em> podcast. Every podcast starts at 12
+                  months; raise it for the ones whose back catalogue is worth
+                  having — an evergreen interview podcast can repay three
+                  years where a daily news round-up does not repay one.
+                  Widening only adds
+                  months: the walk resumes where it stopped, and narrowing
+                  deletes nothing already collected.
+                  (<code>backfill_months</code> in <code>config.yaml</code>.)</td></tr>
+          <tr><td><strong>Episodes</strong></td>
+              <td>Total held for this podcast, and how many are still moving
+                  through the pipeline. Nothing is ever deleted, so this only
+                  grows.
+                  <br><br>
+                  Routine polling only looks forward, so on its own it holds
+                  roughly the last two weeks. Everything older arrives from
+                  <a href="/admin/backfill">historical intake</a>, which records
+                  <em>every</em> archive episode and triages it, whether or not
+                  it publishes a transcript. What a missing transcript costs is a
+                  summary, not a place in the list: those episodes are indexed
+                  and scored, never summarised, while
+                  local transcription is off.</td></tr>
+          <tr><td><strong>Feed health</strong></td>
+              <td>Result of the last poll. After 5 consecutive failures the
+                  circuit opens and polling backs off to daily.</td></tr>
+          <tr><td><strong>Intake</strong></td>
+              <td>Whether new episodes are taken in at all. Disabling keeps
+                  everything already summarised; episodes already queued still
+                  finish.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 style="margin-top:1.2rem">Archive mode</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Value</th><th>During the archive walk</th><th>Suits</th></tr></thead>
+        <tbody>
+          <tr><td><strong>summarise</strong><div class="sub"><code>full</code></div></td>
+              <td>Treated like a new episode: triaged, and if it earns it,
+                  transcribed and summarised. Uses the stricter archive
+                  threshold.</td>
+              <td>Evergreen podcasts, where a two-year-old episode is still worth
+                  reading.</td></tr>
+          <tr><td><strong>triage only</strong><div class="sub"><code>tier0_only</code></div></td>
+              <td>Triaged but never summarised. Even a strong verdict is
+                  downgraded to a one-line index entry in the archive file.</td>
+              <td>Daily news, where a stale headline round-up is worth finding
+                  but not worth minutes of LLM.</td></tr>
+          <tr><td><strong>skip</strong><div class="sub"><code>skip</code></div></td>
+              <td>Excluded entirely — the walk does not even ingest its old
+                  episodes.</td>
+              <td>Podcasts you only care about going forward.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="sub" style="margin:.9rem 0 0">
+      <span class="ovr">A dotted underline</span> marks a value set here rather
+      than taken from <code>config.yaml</code>; click it to revert that one field.
+    </p>
+    <p class="sub" style="margin:.4rem 0 0">
+      Turning <strong>Transcribe locally</strong> on is what lets the archive
+      transcribe this podcast's back catalogue — hours of CPU per podcast, so it
+      is a decision made one podcast at a time rather than a single global
+      switch.
+    </p>
+    <p class="sub" style="margin:.4rem 0 0">
+      <strong>Nothing is ever deleted.</strong> Disabling a podcast stops new
+      episodes being taken in; everything already summarised stays and stays
+      browsable.
+    </p>
+  </section>
+
+  <section>
+    <h2>Add a podcast</h2>
+    <fieldset>
+      <legend>1 · Check the feed</legend>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <input id="probeUrl" placeholder="https://example.com/feed.xml" style="flex:1;min-width:260px">
+        <button id="probeBtn" class="primary">Check feed</button>
+      </div>
+      <p class="sub" id="probeOut" style="margin:.6rem 0 0">
+        Paste an RSS feed URL — not a homepage or an Apple Podcasts link.
+      </p>
+    </fieldset>
+
+    <fieldset id="addFields" style="margin-top:.8rem" disabled>
+      <legend>2 · Add it</legend>
+      <div class="addgrid">
+        <label class="sub">Slug<br><input id="aSlug" placeholder="my-podcast" style="width:100%"></label>
+        <label class="sub">Name<br><input id="aName" placeholder="My Podcast" style="width:100%"></label>
+        <label class="sub">Priority<br>
+          <select id="aPriority" style="width:100%">
+            <option value="med" selected>med</option><option value="high">high</option>
+            <option value="low">low</option>
+          </select></label>
+        <label class="sub">History<br>
+          <select id="aMonths" style="width:100%">
+            <option value="">default (12 months)</option>
+            <option value="24">24 months</option>
+            <option value="36">36 months</option>
+          </select></label>
+        <label class="sub">Archive mode<br>
+          <select id="aBackfill" style="width:100%">
+            <option value="full" selected>summarise</option>
+            <option value="tier0_only">triage only</option>
+            <option value="skip">skip</option>
+          </select></label>
+      </div>
+      <div style="margin-top:.6rem;display:flex;gap:1.2rem;flex-wrap:wrap">
+        <label class="sub"><input type="checkbox" id="aEscalate"> always escalate</label>
+        <label class="sub"><input type="checkbox" id="aAsr"> transcribe locally</label>
+      </div>
+      <button id="addBtn" class="primary" style="margin-top:.7rem">Add podcast</button>
+    </fieldset>
+  </section>
+</main>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const KEY_NAME = "podagent_key";
+  const $ = (id) => document.getElementById(id);
+  let podcasts = [];
+
+  const key = () => sessionStorage.getItem(KEY_NAME) || "";
+
+  async function api(path, options = {}) {
+    const res = await fetch(path, {
+      ...options,
+      headers: {
+        "X-API-Key": key(),
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...(options.headers || {}),
+      },
+    });
+    if (res.status === 401) { lock("Key rejected."); throw new Error("unauthorised"); }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const d = body.detail;
+      throw new Error(typeof d === "string" ? d : JSON.stringify(d || `HTTP ${res.status}`));
+    }
+    return body;
+  }
+
+  function say(text, kind = "ok") {
+    const el = $("msg");
+    el.textContent = text;
+    el.className = `show ${kind}`;
+    if (kind === "ok") setTimeout(() => { el.className = ""; }, 6000);
+  }
+
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+  const when = (iso) => {
+    if (!iso) return "never";
+    const s = (Date.now() - Date.parse(iso)) / 1000;
+    if (Number.isNaN(s)) return "–";
+    if (s < 3600) return `${Math.max(1, Math.floor(s / 60))}m ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+    return `${Math.floor(s / 86400)}d ago`;
+  };
+
+  function ovr(p, field, inner) {
+    return p.overridden.includes(field)
+      ? `<span class="ovr" title="Overridden here — click to revert to config.yaml"
+              data-revert="${esc(p.slug)}" data-field="${esc(field)}">${inner}</span>`
+      : inner;
+  }
+
+  // Measured from the feed, not declared in config: how many of the recent
+  // episodes actually carry a published transcript.
+  //
+  // The sub-line states the *effective outcome*, which needs the ASR setting
+  // too. An earlier version advised "no ASR needed" beside a podcast whose ASR
+  // was on, reading as a contradiction — when in fact acquisition tries the
+  // published transcript first and ASR simply never fires. Saying what will
+  // actually happen is more useful than advice that ignores the next column.
+  // The stored values are what config.yaml holds and cannot change; the labels
+  // say what each one does. The legend below the table shows both.
+  const ARCHIVE_MODES = {
+    full: "summarise",
+    tier0_only: "triage only",
+    skip: "skip",
+  };
+
+  function transcripts(p) {
+    if (!p.polled_for_metadata) return `<span class="sub">not polled yet</span>`;
+    const seen = p.transcripts_seen, of = p.transcripts_of;
+    if (!of) return `<span class="sub">–</span>`;
+
+    const asr = p.asr_enabled;
+    const title = `${seen} of the last ${of} episodes in the feed carry a transcript`;
+    let pill, note;
+    if (seen === of) {
+      pill = `<span class="pill on" title="${esc(title)}">all</span>`;
+      note = asr ? "transcription on, never reached" : "no transcription needed";
+    } else if (seen === 0) {
+      pill = `<span class="pill off" title="${esc(title)}">none</span>`;
+      note = asr ? "transcribed on this machine" : "summarised from descriptions";
+    } else {
+      pill = `<span class="pill" title="${esc(title)}">${seen} of ${of}</span>`;
+      note = asr ? "the rest transcribed here" : "the rest from descriptions";
+    }
+    return `${pill}<div class="sub">${note}</div>`;
+  }
+
+  // Disabled podcasts sink to the bottom, then priority, then name. The list
+  // is read to answer "what is this thing doing for me", and a disabled podcast
+  // is doing nothing.
+  const PRIORITY_ORDER = { high: 0, med: 1, low: 2 };
+
+  function inReadingOrder(list) {
+    return [...list].sort((a, b) =>
+      (a.enabled === b.enabled ? 0 : a.enabled ? -1 : 1) ||
+      (PRIORITY_ORDER[a.priority] ?? 9) - (PRIORITY_ORDER[b.priority] ?? 9) ||
+      (a.name || a.slug).localeCompare(b.name || b.slug));
+  }
+
+  function render() {
+    $("count").textContent = `${podcasts.length} podcasts`;
+    $("rows").innerHTML = inReadingOrder(podcasts).map((p) => {
+      const health = p.consecutive_failures >= 5
+        ? `<span class="pill bad">circuit open</span>`
+        : p.consecutive_failures
+        ? `<span class="pill off">${esc(p.consecutive_failures)} fails</span>`
+        : `<span class="pill on">ok</span>`;
+      // A checkbox, like Always escalate. Both are booleans; rendering one as
+      // a bespoke ON/off toggle and the other as a checkbox made two identical
+      // kinds of setting look like different kinds of thing. The dropdowns
+      // beside them exist because those fields have three values, not two.
+      const asr = `<input type="checkbox" data-field="asr_enabled"
+        data-slug="${esc(p.slug)}"${p.asr_enabled ? " checked" : ""}>`;
+      // Facts about the podcast itself, kept together and apart from the
+      // columns that are our settings for it.
+      const traits = p.cadence
+        ? `<span title="${esc(p.cadence_detail || "")} (from ${esc(p.cadence_source || "")})">${
+            esc(p.cadence)}</span>`
+        : `<span title="${p.polled_for_metadata
+            ? "Too few dated episodes in the feed to measure"
+            : "Filled at the next poll"}">cadence unknown</span>`;
+      const blurb = p.description
+        ? `<div class="blurb" title="${esc(p.description)}">${esc(p.description)}</div>`
+        : `<div class="blurb sub"><em>no description yet — filled at the next poll</em></div>`;
+      return `<tr class="${p.enabled ? "" : "off"}">
+        <td class="podcell"><strong>${esc(p.name)}</strong>
+          <div class="sub">${esc(p.slug)}</div>${blurb}
+          <div class="sub">${traits}</div></td>
+        <td>${transcripts(p)}</td>
+        <td>${ovr(p, "priority", `<select data-field="priority" data-slug="${esc(p.slug)}">${
+          ["high", "med", "low"].map((v) =>
+            `<option${v === p.priority ? " selected" : ""}>${v}</option>`).join("")}</select>`)}</td>
+        <td style="text-align:center">${ovr(p, "always_escalate",
+          `<input type="checkbox" data-field="always_escalate" data-slug="${esc(p.slug)}"${
+            p.always_escalate ? " checked" : ""}>`)}</td>
+        <td style="text-align:center">${ovr(p, "asr_enabled", asr)}</td>
+        <td>${ovr(p, "backfill_mode", `<select data-field="backfill_mode" data-slug="${esc(p.slug)}">${
+          Object.entries(ARCHIVE_MODES).map(([v, label]) =>
+            `<option value="${esc(v)}"${v === p.backfill_mode ? " selected" : ""}>${
+              esc(label)}</option>`).join("")}</select>`)}${
+          p.archive_indexes_only && p.backfill_mode === "full"
+            ? `<div class="sub" title="Nothing to summarise from: this podcast publishes no transcript and is not set to transcribe locally. Turn on Transcribe locally to change it.">not reachable — indexes only</div>`
+            : ""}</td>
+        <td>${ovr(p, "backfill_months",
+          `<select data-field="backfill_months" data-slug="${esc(p.slug)}">${
+            [12, 24, 36].map((v) =>
+              `<option value="${v}"${v === p.backfill_months ? " selected" : ""}>${v} mo</option>`
+            ).join("")}</select>`)}</td>
+        <td>${esc(p.episodes)}${p.queued
+          ? `<div class="sub">${esc(p.queued)} still in flight</div>` : ""}${
+          p.archive_indexes_only
+            ? `<div class="sub">archive indexed only</div>` : ""}</td>
+        <td>${health}<div class="sub">${when(p.last_polled_at)}</div></td>
+        <td style="white-space:nowrap">
+          <button class="${p.enabled ? "" : "primary"}" data-enable="${esc(p.slug)}">${
+            p.enabled ? "Disable" : "Enable"}</button>
+          <div class="sub">${p.enabled ? "taking new episodes" : "no new episodes"}</div>
+        </td>
+      </tr>`;
+    }).join("") || `<tr><td colspan="10" class="sub">No podcasts.</td></tr>`;
+    wireRows();
+  }
+
+  async function patch(slug, changes, label) {
+    try {
+      await api(`/api/v1/podcasts/${encodeURIComponent(slug)}`, {
+        method: "PATCH", body: JSON.stringify(changes),
+      });
+      say(`${slug}: ${label}`);
+      await load();
+    } catch (err) { say(`${slug}: ${err.message}`, "err"); }
+  }
+
+  function wireRows() {
+    document.querySelectorAll("select[data-field]").forEach((el) =>
+      el.addEventListener("change", () => {
+        // backfill_months is an integer field; a select always yields a string.
+        const raw = el.value;
+        const value = el.dataset.field === "backfill_months" ? Number(raw) : raw;
+        patch(el.dataset.slug, { [el.dataset.field]: value }, `${el.dataset.field} = ${raw}`);
+      }));
+    document.querySelectorAll("input[type=checkbox][data-field]").forEach((el) =>
+      el.addEventListener("change", () =>
+        patch(el.dataset.slug, { [el.dataset.field]: el.checked },
+              `${el.dataset.field} = ${el.checked}`)));
+    document.querySelectorAll("[data-enable]").forEach((el) =>
+      el.addEventListener("click", () => {
+        const p = podcasts.find((x) => x.slug === el.dataset.enable);
+        patch(p.slug, { enabled: !p.enabled }, p.enabled ? "disabled" : "enabled");
+      }));
+    document.querySelectorAll("[data-revert]").forEach((el) =>
+      el.addEventListener("click", async (event) => {
+        if (event.target !== el) return;   // only the label itself, not the control
+        const { revert: slug, field } = el.dataset;
+        if (!confirm(`Revert ${field} for ${slug} to the config.yaml value?`)) return;
+        try {
+          await api(`/api/v1/podcasts/${encodeURIComponent(slug)}/overrides/${field}`,
+                    { method: "DELETE" });
+          say(`${slug}: ${field} reverted to config.`);
+          await load();
+        } catch (err) { say(`${slug}: ${err.message}`, "err"); }
+      }));
+  }
+
+  async function load() {
+    try {
+      podcasts = (await api("/api/v1/podcasts")).podcasts || [];
+      render();
+    } catch (err) {
+      if (err.message !== "unauthorised") say(`Load failed: ${err.message}`, "err");
+    }
+  }
+
+  async function probe() {
+    const url = $("probeUrl").value.trim();
+    if (!url) return;
+    $("probeBtn").disabled = true;
+    $("probeOut").textContent = "Checking…";
+    try {
+      const r = await api(`/api/v1/podcasts/probe?feed_url=${encodeURIComponent(url)}`,
+                          { method: "POST" });
+      $("probeOut").innerHTML =
+        `<strong>${esc(r.title || "(untitled feed)")}</strong> — ${esc(r.detail)}<br>` +
+        (r.description ? `<em>${esc(r.description)}</em><br>` : "") +
+        `${r.entries_seen} recent items, ${r.with_audio} with audio, ` +
+        `${r.with_transcripts} with published transcripts` +
+        (r.cadence ? `, publishing ${esc(r.cadence)}` : "") + "." +
+        (r.latest ? `<br>Latest: ${esc(r.latest)}` : "");
+      $("addFields").disabled = !r.ok;
+      if (r.ok) {
+        $("aSlug").value = r.suggested_slug || "";
+        $("aName").value = r.title || "";
+        // A podcast that ships transcripts rarely needs ASR; nudge accordingly.
+        $("aAsr").checked = r.with_transcripts === 0;
+      }
+    } catch (err) {
+      $("probeOut").textContent = err.message;
+      $("addFields").disabled = true;
+    } finally { $("probeBtn").disabled = false; }
+  }
+
+  async function add() {
+    const body = {
+      slug: $("aSlug").value.trim(),
+      name: $("aName").value.trim(),
+      feed_url: $("probeUrl").value.trim(),
+      priority: $("aPriority").value,
+      backfill_mode: $("aBackfill").value,
+      ...($("aMonths").value ? { backfill_months: Number($("aMonths").value) } : {}),
+      always_escalate: $("aEscalate").checked,
+      asr_enabled: $("aAsr").checked,
+    };
+    try {
+      await api("/api/v1/podcasts", { method: "POST", body: JSON.stringify(body) });
+      say(`${body.slug} added. It will be polled on the next ingest.`);
+      $("probeUrl").value = ""; $("aSlug").value = ""; $("aName").value = "";
+      $("addFields").disabled = true;
+      $("probeOut").textContent = "Paste an RSS feed URL to check another.";
+      await load();
+    } catch (err) { say(err.message, "err"); }
+  }
+
+  async function unlock() {
+    const value = $("key").value.trim();
+    if (!value) return;
+    sessionStorage.setItem(KEY_NAME, value);
+    try { await api("/api/v1/podcasts"); start(); }
+    catch { sessionStorage.removeItem(KEY_NAME); $("gateErr").textContent = "That key was rejected."; }
+  }
+
+  function lock(reason) {
+    sessionStorage.removeItem(KEY_NAME);
+    $("app").hidden = true; $("gate").hidden = false;
+    $("gateErr").textContent = reason || "";
+  }
+
+  function start() { $("gate").hidden = true; $("app").hidden = false; load(); }
+
+  $("unlock").addEventListener("click", unlock);
+  $("key").addEventListener("keydown", (e) => { if (e.key === "Enter") unlock(); });
+  $("reload").addEventListener("click", load);
+  $("forget").addEventListener("click", () => lock("Key cleared."));
+  $("probeBtn").addEventListener("click", probe);
+  $("probeUrl").addEventListener("keydown", (e) => { if (e.key === "Enter") probe(); });
+  $("addBtn").addEventListener("click", add);
+
+  if (key()) start(); else $("gate").hidden = false;
+})();
+</script>
+</body>
+</html>
