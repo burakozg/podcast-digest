@@ -26,15 +26,20 @@ verified working on an M2 / 16 GB.
 ## One-time setup
 
 ```bash
-# 1. CouchDB (the only container you need)
+# 1. CouchDB (the only container you need).
+#    Generate the password rather than reusing one from a document — this
+#    container publishes 5984 on every interface, so it is reachable by anything
+#    that can reach this machine.
+COUCHDB_DEV_PASSWORD="$(openssl rand -hex 24)"
+
 docker run -d --name couchdb-podcast-local -p 5984:5984 \
-  -e COUCHDB_USER=podagent -e COUCHDB_PASSWORD=localdevpassword \
+  -e COUCHDB_USER=podagent -e COUCHDB_PASSWORD="$COUCHDB_DEV_PASSWORD" \
   -v podcast-couchdb-local:/opt/couchdb/data couchdb:3
 
 # 2. Secrets. Running natively, the app needs the CouchDB password under its own
 #    prefix — docker-compose does that mapping for you, nothing does it here.
 cp .env.example .env
-printf 'PODAGENT_COUCHDB_PASSWORD=localdevpassword\n' >> .env
+printf 'PODAGENT_COUCHDB_PASSWORD=%s\n' "$COUCHDB_DEV_PASSWORD" >> .env
 # set PODAGENT_ADMIN_API_KEY in .env:  openssl rand -hex 32
 
 # 3. Dependencies (uv fetches Python 3.12 itself)
