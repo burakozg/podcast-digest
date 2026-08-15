@@ -8,7 +8,7 @@ one, which is the way this signal is easiest to misread.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -26,6 +26,7 @@ from podcast_agent.signals import (
     render,
 )
 from podcast_agent.state import EpisodeStatus
+from podcast_agent.utils import iso, parse_iso, utcnow
 
 S = EpisodeStatus
 KEY = {"X-API-Key": "test-admin-key"}
@@ -178,10 +179,15 @@ class TestOnlyWhatIsNew:
     async def test_only_the_new_mark_appears_in_the_next_file(
         self, store: MemoryStore, settings
     ) -> None:
-        store.seed(marked("first", starred=True, at="2026-08-01T00:00:00+00:00"))
-        await export_new_marks(store, settings)
+        # Relative to the cursor the first export leaves behind, not to fixed
+        # dates: an export's `until` is *now*, so hardcoded timestamps stop being
+        # "after the last export" the moment real time passes them, and the
+        # second mark silently stops counting as new.
+        store.seed(marked("first", starred=True, at=iso(utcnow() - timedelta(days=1))))
+        first = await export_new_marks(store, settings)
 
-        store.seed(marked("second", starred=True, at="2026-08-09T00:00:00+00:00"))
+        after_first = iso(parse_iso(first["until"]) + timedelta(seconds=1))
+        store.seed(marked("second", starred=True, at=after_first))
         result = await export_new_marks(store, settings)
 
         assert result["marks"] == 1

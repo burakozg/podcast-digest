@@ -28,6 +28,20 @@ PRIORITY_FEED_URL = "https://priority-show.net/feed.xml"
 
 
 @pytest.fixture
+def all_shows_settings(tmp_path: Path):
+    """Every configured show, and no lookback window.
+
+    The default fixture inherits `initial_lookback_days`, which silently turns
+    into a clock: feed_basic.xml's pubDates are fixed in July 2026, so the whole
+    fixture aged out of the window and this test began asserting against zero
+    ingested episodes. Zero means "no cutoff" (see Ingestor._cutoff_for), which
+    is what a test about failure handling wants — the lookback has its own
+    tests, with dates relative to now.
+    """
+    return make_settings(tmp_path, pipeline={"initial_lookback_days": 0})
+
+
+@pytest.fixture
 def one_show_settings(tmp_path: Path):
     return make_settings(
         tmp_path,
@@ -289,7 +303,8 @@ class TestBackfillGuard:
 
 class TestFailureHandling:
     @respx.mock
-    async def test_one_bad_feed_does_not_stop_the_others(self, settings) -> None:
+    async def test_one_bad_feed_does_not_stop_the_others(self, all_shows_settings) -> None:
+        settings = all_shows_settings
         store = MemoryStore()
         respx.get(FEED_URL).mock(return_value=httpx.Response(500))
         respx.get(PRIORITY_FEED_URL).mock(return_value=httpx.Response(200, text=FEED))
