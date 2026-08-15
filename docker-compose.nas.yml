@@ -66,6 +66,23 @@ services:
       # with the memory limit they exist to stay under.
       PODAGENT_PIPELINE__MAX_TRANSCRIPTS_PER_RUN: "2"
       PODAGENT_ASR__DOWNLOAD_CONCURRENCY: "1"
+      # Where transcription actually happens. This NAS manages a realtime factor
+      # of 0.11 — ten hours of CPU for a 68-minute episode — so the work is sent
+      # to a machine that can do it, over the OpenAI audio API shape.
+      #
+      # `remote_url` is deliberately NOT console-editable (it is deployment
+      # topology, like an LLM api_base), so it has to come from here. The
+      # matching `backend: remote` DOES live in the console override, because an
+      # override merges on top of these env vars and would otherwise pin it back
+      # to `local` — silently, with the NAS grinding at 0.11 and nothing saying
+      # why.
+      #
+      # Set ASR_REMOTE_URL in this directory's .env to the machine that
+      # transcribes; the default below is a placeholder and is meant to fail.
+      # A DHCP lease will need updating if the address moves, and the failure is
+      # benign either way: unreachable raises ASRUnavailable, so episodes stay
+      # queued and spend no retry budget.
+      PODAGENT_ASR__REMOTE_URL: "${ASR_REMOTE_URL:-http://transcriber.local:8000}"
     volumes:
       # Replaces the podcast-work named volume from the base file. Same target
       # path, so this entry supersedes it rather than adding a second mount.

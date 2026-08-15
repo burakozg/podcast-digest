@@ -114,9 +114,18 @@ NAS_LAN_IP=10.0.0.2
 # override rather than editing config.yaml, so the deployed config.yaml stays
 # byte-identical to the repo's.
 PODAGENT_ASR__MODEL=small.en
+
+# The machine that transcribes. This NAS manages a realtime factor of 0.11 --
+# ten hours of CPU for a 68-minute episode -- so ASR is pushed to a box that
+# can do it, over the OpenAI audio API (speaches, faster-whisper-server,
+# whisper.cpp's server and LocalAI all speak it). Switching machines later is
+# this one value. Unreachable is benign: episodes queue and spend no retry
+# budget. Pair with `backend: remote` in the console's ASR settings, and a
+# model name the server actually has installed.
+ASR_REMOTE_URL=http://transcriber.local:8000
 EOF
 
-ssh -p $P $NAS "grep -c '^[A-Z]' $APP/.env"     # expect 10 assignments
+ssh -p $P $NAS "grep -c '^[A-Z]' $APP/.env"     # expect 11 assignments
 ```
 
 > **You need an Anthropic API key before this will start.** `config.yaml` puts an
