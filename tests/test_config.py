@@ -10,6 +10,7 @@ from helpers import DROP, make_settings
 from pydantic import ValidationError
 
 import podcast_agent.config as config_module
+from podcast_agent.api.settings import _SECRET_FIELDS
 from podcast_agent.config import LLMTierConfig, PipelineConfig, Provider, Settings, load_settings
 from podcast_agent.settings_store import (
     OverrideRejected,
@@ -118,6 +119,72 @@ class TestValidConfig:
         assert "test-admin-key" not in repr(settings)
         assert settings.admin_api_key is not None
         assert settings.admin_api_key.get_secret_value() == "test-admin-key"
+
+
+class TestOverridePrecedence:
+    """Console overrides must sit BELOW the environment, and merge partially.
+
+    They used to be handed to Settings as init kwargs, which outrank every other
+    source. Two silent failures followed, both seen in production: environment
+    variables for an overridden section stopped applying at all, and keys absent
+    from a partial override fell back to *field defaults* rather than to
+    config.yaml or the environment. A `PODAGENT_ASR__DOWNLOAD_CONCURRENCY=1`
+    deployment guard was inert for five days because an `asr` override existed.
+
+    These go through a real config file and real environment variables rather
+    than `make_settings`, whose init kwargs would outrank every source and hide
+    exactly the ordering under test.
+    """
+
+    @staticmethod
+    def _config_file(tmp_path: Path) -> Path:
+        """A minimal valid config.yaml on disk, for the YAML source to read."""
+        import yaml
+
+        base = make_settings(tmp_path)
+        data = base.model_dump(mode="json", exclude=set(_SECRET_FIELDS))
+        path = tmp_path / "config.yaml"
+        path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        return path
+
+    @pytest.fixture(autouse=True)
+    def _secrets(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("PODAGENT_ADMIN_API_KEY", "k")
+        monkeypatch.setenv("PODAGENT_COUCHDB_PASSWORD", "p")
+        monkeypatch.setenv("PODAGENT_OPENROUTER_API_KEY", "o")
+        monkeypatch.setenv("PODAGENT_ANTHROPIC_API_KEY", "a")
+
+    def test_environment_beats_a_console_override(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Deployment topology comes from the environment; a browser cannot displace it."""
+        path = self._config_file(tmp_path)
+        monkeypatch.setenv("PODAGENT_ASR__MODEL", "from-the-environment")
+        settings = load_settings(path, overrides={"asr": {"model": "from-the-console"}})
+        assert settings.asr.model == "from-the-environment"
+
+    def test_a_partial_override_does_not_reset_its_siblings(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Overriding one asr key must not erase the others back to defaults."""
+        path = self._config_file(tmp_path)
+        monkeypatch.setenv("PODAGENT_ASR__REMOTE_URL", "http://transcriber.local:8000")
+        monkeypatch.setenv("PODAGENT_ASR__DOWNLOAD_CONCURRENCY", "1")
+        settings = load_settings(path, overrides={"asr": {"beam_size": 3}})
+
+        assert settings.asr.beam_size == 3, "the override itself must apply"
+        assert settings.asr.remote_url == "http://transcriber.local:8000", (
+            "an env-supplied key was reset by an unrelated partial override"
+        )
+        assert settings.asr.download_concurrency == 1, (
+            "an env-supplied key fell back to the field default"
+        )
+
+    def test_an_override_still_beats_the_config_file(self, tmp_path: Path) -> None:
+        """The point of overrides: above the file, below the environment."""
+        path = self._config_file(tmp_path)
+        settings = load_settings(path, overrides={"pipeline": {"digest_threshold": 8}})
+        assert settings.pipeline.digest_threshold == 8
 
 
 class TestRejectsBadConfig:

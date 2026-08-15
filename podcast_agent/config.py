@@ -338,6 +338,11 @@ class ASRConfig(StrictModel):
     asr_concurrency: int = Field(default=1, ge=1, le=4)
     download_concurrency: int = Field(default=2, ge=1, le=8)
     remote_url: str | None = None
+    #: How long to wait for a remote transcription. Generous on purpose: this is
+    #: one HTTP call covering the whole decode, so it must outlast the longest
+    #: episode on the slowest machine that might answer. A 3-hour episode at 2x
+    #: realtime is 90 minutes of silence on the socket.
+    remote_timeout_s: int = Field(default=2700, ge=30, le=21600)
 
     @model_validator(mode="after")
     def _remote_needs_url(self) -> ASRConfig:
@@ -475,9 +480,42 @@ class _YamlSource(PydanticBaseSettingsSource):
         return _yaml_settings(self._path)
 
 
+class _OverridesSource(PydanticBaseSettingsSource):
+    """Feeds the console-editable overrides in *below* environment variables.
+
+    These used to be deep-merged into the YAML dict and handed to ``Settings``
+    as init kwargs, which outrank every other source. Two things went wrong with
+    that, both silent:
+
+    * Environment variables for an overridden section stopped applying at all.
+      ``PODAGENT_ASR__DOWNLOAD_CONCURRENCY=1`` was ignored for five days in
+      production because an ``asr`` override existed, and nothing said so.
+    * Keys absent from a *partial* override fell back to **field defaults**
+      rather than to config.yaml or the environment — so overriding
+      ``asr.model`` quietly reset ``asr.remote_url`` to None and
+      ``download_concurrency`` to 2.
+
+    As a source they compose properly instead: pydantic-settings deep-merges
+    across sources, so a partial override changes only the keys it names, and
+    the environment still wins over it.
+    """
+
+    def __init__(self, settings_cls: type[BaseSettings], overrides: dict[str, Any]) -> None:
+        super().__init__(settings_cls)
+        self._overrides = overrides
+
+    def get_field_value(self, field: Any, field_name: str) -> tuple[Any, str, bool]:
+        # Unused: the whole document is supplied at once via __call__.
+        raise NotImplementedError
+
+    def __call__(self) -> dict[str, Any]:
+        return self._overrides
+
+
 #: Set by load_settings() before the model is constructed. Module state is the
 #: only way to parameterise a pydantic-settings source at class level.
 _active_yaml_path: Path = Path(DEFAULT_CONFIG_FILE)
+_active_overrides: dict[str, Any] = {}
 
 
 class Settings(BaseSettings):
@@ -532,11 +570,18 @@ class Settings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        # Precedence: explicit init args > env > .env > config.yaml > defaults.
+        # Precedence: init args > env > .env > console overrides > config.yaml
+        # > defaults.
+        #
+        # Overrides sit below the environment on purpose. They are edited from a
+        # browser; deployment topology (where the database is, which machine
+        # transcribes) comes from the environment and must not be displaceable
+        # by one.
         return (
             init_settings,
             env_settings,
             dotenv_settings,
+            _OverridesSource(settings_cls, _active_overrides),
             _YamlSource(settings_cls, _active_yaml_path),
             file_secret_settings,
         )
@@ -644,17 +689,13 @@ def load_settings(
     validation — so an override that produces incoherent config fails the same
     way a bad file does, rather than at first use.
     """
-    global _active_yaml_path
+    global _active_yaml_path, _active_overrides
     path = Path(config_file or os.environ.get("PODAGENT_CONFIG_FILE", DEFAULT_CONFIG_FILE))
     _active_yaml_path = path
-    if not overrides:
-        return Settings()
-
-    from .settings_store import deep_merge
-
-    merged = deep_merge(_yaml_settings(path), overrides)
-    # Passed as init args, which outrank the YAML source.
-    return Settings(**merged)
+    _active_overrides = overrides or {}
+    # No init kwargs: overrides are a *source* now, ranked below the environment
+    # (see _OverridesSource). Passing them here would put them above it again.
+    return Settings()
 
 
 @lru_cache(maxsize=1)
