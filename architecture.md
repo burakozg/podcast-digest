@@ -553,6 +553,7 @@ podcast_agent/
   state.py         status enum + the allowed-transition map
   models.py        LLM response schemas (sanitising validators)
   sanitize.py      untrusted-content handling
+  speech.py        text-to-speech backend (OpenAI /v1/audio/speech shape)
   net.py           outbound guards, byte caps, domain allowlist
   episodes.py      guarded status transitions
   joblock.py       cross-process job leases (control:lock:*)
@@ -571,7 +572,8 @@ podcast_agent/
   triage/          tier0.py (the call) + routing.py (the decision)
   transcripts/     acquire, normalize, asr, stage
   summarize/       tier1.py + chunking.py (map-reduce)
-  digest/          generate.py, synthesis.py, archive.py, read.py, templates
+  digest/          generate.py, synthesis.py, archive.py, read.py, export.py,
+                   narrate.py, templates
   backfill/        ingest, process, estimate, control
   llm/             the ONLY place litellm/instructor are imported
   api/             routes, podcast management, auth, console pages

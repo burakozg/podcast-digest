@@ -40,6 +40,7 @@ def build_scheduler(
     retention: RetentionJob,
     search: SearchIndex | None = None,
     signals: Callable[[], Awaitable[Any]] | None = None,
+    narrate: Callable[[], Awaitable[Any]] | None = None,
 ) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(
         timezone=settings.scheduler.timezone,
@@ -60,6 +61,12 @@ def build_scheduler(
     ]
     if signals is not None:
         jobs.append(("signals_export", settings.scheduler.signals_cron, signals))
+    if narrate is not None:
+        # Hourly, and idempotent: it reads the newest digest and returns without
+        # a request when the audio is already there. The machine that
+        # synthesises is a laptop, so the retry cadence — not the digest cron —
+        # is what decides how long a sleeping Mac delays the week's audio.
+        jobs.append(("digest_narrate", settings.scheduler.narrate_cron, narrate))
     if search is not None:
         # Without this the index is only ever as current as the last manual
         # rebuild, which is the failure mode nobody notices: search quietly

@@ -215,3 +215,15 @@ def md_to_safe_html(markdown: str | None) -> str:
         strip=True,
         strip_comments=True,
     )
+
+
+def md_to_speech_text(markdown: str | None) -> str:
+    """Markdown as prose to be read aloud.
+
+    A speech synthesiser reads ``**bold**`` as "asterisk asterisk bold" and a
+    URL character by character, so the digest's Markdown cannot be sent as-is.
+    Rendering to HTML and then stripping every tag is the shortest route that
+    also drops link *targets* while keeping link *text*: both halves already
+    exist here, and neither has to learn about the other.
+    """
+    return html_to_text(md_to_safe_html(markdown))

@@ -838,6 +838,111 @@ class TestWhyNoSummary:
         assert episode["tier0"] is None
 
 
+class TestExportingOneEpisode:
+    """Handing a single summary to someone who does not have the vault.
+
+    The vault notes the digest writes are Obsidian documents — frontmatter,
+    wikilinks, a backlink to the week. This export is the same summary with all
+    three removed, because it leaves the vault.
+    """
+
+    def _client(self, tmp_path, store: MemoryStore) -> TestClient:
+        return TestClient(build_app(make_settings(tmp_path), store=store, llm=FakeLLM()))
+
+    def _seed(
+        self, store: MemoryStore, *, _status: EpisodeStatus = S.READY_FOR_DIGEST, **tier1: Any
+    ) -> str:
+        doc = make_episode(
+            guid="exportable",
+            title="Ransomware crews are hiring",
+            status=_status,
+            tier1={
+                "relevance_score": 8,
+                "summary_basis": "transcript",
+                "why_it_matters": "Two crews now run formal recruitment pipelines.",
+                "summary_md": "Affiliate churn hit **40%** this quarter.",
+                "key_takeaways": ["Affiliate churn is up", "Recruitment is public"],
+                "entities": ["LockBit", "Cl0p"],
+                **tier1,
+            },
+        )
+        store.seed(doc)
+        return str(doc["_id"])
+
+    def _export(self, client: TestClient, episode_id: str) -> Any:
+        return client.get(f"/api/v1/episodes/{episode_id}/export", headers=KEY)
+
+    def test_it_needs_the_key(self, tmp_path, store: MemoryStore) -> None:
+        episode_id = self._seed(store)
+        with self._client(tmp_path, store) as client:
+            assert client.get(f"/api/v1/episodes/{episode_id}/export").status_code == 401
+
+    def test_the_markdown_carries_the_whole_summary(self, tmp_path, store: MemoryStore) -> None:
+        episode_id = self._seed(store)
+        with self._client(tmp_path, store) as client:
+            body = self._export(client, episode_id).json()
+
+        markdown = body["markdown"]
+        assert markdown.startswith("# Ransomware crews are hiring")
+        assert "Two crews now run formal recruitment pipelines." in markdown
+        assert "Affiliate churn hit **40%** this quarter." in markdown
+        assert "- Affiliate churn is up" in markdown
+        assert "- Recruitment is public" in markdown
+        assert "LockBit · Cl0p" in markdown
+        # The show, the date and a way back to the episode itself: without these
+        # the file is an anonymous block of text in someone else's inbox.
+        assert "Test Show" in markdown
+        assert "2026-07-28" in markdown
+        assert "https://example.com/ep1" in markdown
+
+    def test_it_says_where_the_summary_came_from(self, tmp_path, store: MemoryStore) -> None:
+        """The recipient did not run the pipeline and cannot tell a transcript
+        summary from one written off a marketing blurb."""
+        episode_id = self._seed(store, summary_basis="description_only")
+        with self._client(tmp_path, store) as client:
+            markdown = self._export(client, episode_id).json()["markdown"]
+        assert "description only (no transcript available)" in markdown
+        assert "8/10" in markdown
+
+    def test_no_vault_only_markup_survives(self, tmp_path, store: MemoryStore) -> None:
+        episode_id = self._seed(store)
+        with self._client(tmp_path, store) as client:
+            markdown = self._export(client, episode_id).json()["markdown"]
+        assert not markdown.startswith("---")
+        assert "[[" not in markdown
+        assert "podcast-digest-" not in markdown
+
+    def test_the_filename_is_filable_as_is(self, tmp_path, store: MemoryStore) -> None:
+        episode_id = self._seed(store)
+        with self._client(tmp_path, store) as client:
+            body = self._export(client, episode_id).json()
+        assert body["filename"] == "test-show-2026-07-28-ransomware-crews-are-hiring.md"
+        assert body["episode_id"] == episode_id
+
+    def test_an_episode_with_no_summary_is_refused(self, tmp_path, store: MemoryStore) -> None:
+        """409, not 404: the episode exists, there is simply nothing to send."""
+        store.seed(make_episode(guid="bare", status=S.NEW))
+        with self._client(tmp_path, store) as client:
+            response = self._export(client, episode_doc_id("test-show", "bare"))
+        assert response.status_code == 409
+        assert "no summary" in response.json()["detail"]
+
+    def test_an_unknown_episode_is_a_404(self, tmp_path, store: MemoryStore) -> None:
+        with self._client(tmp_path, store) as client:
+            assert self._export(client, "episode:nope").status_code == 404
+
+    def test_a_grey_zone_episode_summarised_later_still_exports(
+        self, tmp_path, store: MemoryStore
+    ) -> None:
+        """DIGEST_DIRECT has its own one-liner view in the digest, which has no
+        summary_md. Reaching it through that branch would export an empty file.
+        """
+        episode_id = self._seed(store, _status=S.DIGEST_DIRECT)
+        with self._client(tmp_path, store) as client:
+            markdown = self._export(client, episode_id).json()["markdown"]
+        assert "Affiliate churn hit **40%** this quarter." in markdown
+
+
 class TestPodcastManagement:
     """config.yaml is the declared baseline; the console writes overrides to the
     database, because config.yaml is mounted read-only in the container."""
@@ -2010,6 +2115,69 @@ class TestDigestBrowsing:
         assert body == {"count": 0, "digests": []}
 
 
+class TestNarratingADigest:
+    """The console's route into text-to-speech.
+
+    Naming a week is the only way to narrate one that is not the newest — the
+    scheduled job cannot, by construction — so this endpoint is what stops the
+    archive from being unreachable *and* what stops it from being walked.
+    """
+
+    def _client(self, tmp_path, store: MemoryStore, *, tts: bool = True) -> TestClient:
+        settings = make_settings(
+            tmp_path,
+            tts={"enabled": True, "base_url": "http://mac.lan:8880"} if tts else {},
+        )
+        return TestClient(build_app(settings, store=store, llm=FakeLLM()))
+
+    def _seed(self, store: MemoryStore, week: str = "2026-W31") -> None:
+        store.seed(
+            {
+                "_id": digest_doc_id(week),
+                "type": "digest",
+                "period": {"from": f"{week[:4]}-07-24T00:00:00+00:00", "to": f"{week[:4]}-07-31"},
+                "file_path": f"{week[:4]}/podcast-digest-{week}.md",
+                "episode_ids": [],
+                "marking_complete": True,
+                "generated_at": iso_now(),
+            }
+        )
+
+    def test_it_needs_the_key(self, tmp_path, store: MemoryStore) -> None:
+        self._seed(store)
+        with self._client(tmp_path, store) as client:
+            assert client.post("/api/v1/digests/2026-W31/narrate").status_code == 401
+
+    def test_an_unknown_week_is_a_404(self, tmp_path, store: MemoryStore) -> None:
+        with self._client(tmp_path, store) as client:
+            response = client.post("/api/v1/digests/1999-W01/narrate", headers=KEY)
+        assert response.status_code == 404
+
+    def test_it_is_refused_while_speech_is_off(self, tmp_path, store: MemoryStore) -> None:
+        """Rather than starting a job that can only fail at the first request."""
+        self._seed(store)
+        with self._client(tmp_path, store, tts=False) as client:
+            response = client.post("/api/v1/digests/2026-W31/narrate", headers=KEY)
+        assert response.status_code == 409
+        assert "disabled" in response.json()["detail"]
+
+    def test_a_week_with_nothing_to_read_is_a_409(self, tmp_path, store: MemoryStore) -> None:
+        self._seed(store)
+        with self._client(tmp_path, store) as client:
+            response = client.post("/api/v1/digests/2026-W31/narrate?wait=true", headers=KEY)
+        assert response.status_code == 409
+        assert "no summarised episodes" in response.json()["detail"]
+
+    def test_the_listing_reports_whether_a_run_has_audio(
+        self, tmp_path, store: MemoryStore
+    ) -> None:
+        """The console hides its button on a run that already has a file."""
+        self._seed(store)
+        with self._client(tmp_path, store) as client:
+            body = client.get("/api/v1/digests", headers=KEY).json()
+        assert body["digests"][0]["runs"][0]["narration"] is None
+
+
 class TestActivityConsole:
     """/admin/logs and the endpoints behind it."""
 
@@ -2367,6 +2535,63 @@ class TestRewindEndpoint:
             page = client.get("/admin/backfill").text
         assert 'id="bfRewind"' in page
         assert "Re-walk archive" in page
+
+
+class TestSpeechSettings:
+    """The console half of reading the digest aloud."""
+
+    def _client(self, tmp_path, store: MemoryStore, **tts) -> TestClient:
+        settings = make_settings(tmp_path, tts=tts) if tts else make_settings(tmp_path)
+        return TestClient(build_app(settings, store=store, llm=FakeLLM()))
+
+    def test_the_current_voice_is_reported(self, tmp_path, store: MemoryStore) -> None:
+        with self._client(tmp_path, store) as client:
+            body = client.get("/api/v1/settings", headers=KEY).json()
+        assert body["tts"]["enabled"] is False
+        assert body["tts"]["voice"]
+        assert "tts" in body["editable_sections"]
+
+    def test_the_address_is_reported_but_not_editable(self, tmp_path, store: MemoryStore) -> None:
+        """Which machine synthesises is deployment topology, like asr.remote_url."""
+        with self._client(tmp_path, store, enabled=True, base_url="http://mac.lan:8880") as client:
+            body = client.get("/api/v1/settings", headers=KEY).json()
+        assert body["tts_fixed"]["base_url"] == "http://mac.lan:8880"
+        assert "base_url" not in body["tts"]
+
+        with self._client(tmp_path, store) as client:
+            refused = client.put(
+                "/api/v1/settings", headers=KEY, json={"tts": {"base_url": "http://elsewhere"}}
+            )
+        assert refused.status_code == 400
+        assert "not overridable" in refused.json()["detail"]
+
+    def test_the_voice_can_be_changed(self, tmp_path, store: MemoryStore) -> None:
+        with self._client(tmp_path, store) as client:
+            saved = client.put(
+                "/api/v1/settings", headers=KEY, json={"tts": {"voice": "bm_george"}}
+            )
+            assert saved.status_code == 200, saved.text
+            body = client.get("/api/v1/settings", headers=KEY).json()
+        assert body["overrides"]["tts"]["voice"] == "bm_george"
+
+    def test_enabling_it_with_nowhere_to_send_it_is_refused(
+        self, tmp_path, store: MemoryStore
+    ) -> None:
+        """Otherwise the failure arrives at the first hourly fire, in a log."""
+        with self._client(tmp_path, store) as client:
+            response = client.put("/api/v1/settings", headers=KEY, json={"tts": {"enabled": True}})
+        assert response.status_code == 400
+        assert "base_url" in response.text
+
+    def test_the_page_shows_the_speech_controls(self, tmp_path, store: MemoryStore) -> None:
+        with self._client(tmp_path, store) as client:
+            page = client.get("/admin/settings").text
+        assert "Reading the digest aloud" in page
+        assert 'id="tts"' in page
+        # The two things that surprise people: where the file goes, and that
+        # history is not swept up automatically.
+        assert "next to the Markdown in your vault" in page
+        assert "never narrated automatically" in page
 
 
 class TestASRSettings:

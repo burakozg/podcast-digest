@@ -226,6 +226,19 @@ class TestRejectsBadConfig:
         with pytest.raises(ValidationError, match="invalid cron expression"):
             build(tmp_path, scheduler={"digest_cron": "not a cron"})
 
+    def test_a_bad_narrate_cron_is_caught_at_startup(self, tmp_path: Path) -> None:
+        """Every named cron must be in the validator's list, not just the old ones."""
+        with pytest.raises(ValidationError, match="invalid cron expression"):
+            build(tmp_path, scheduler={"narrate_cron": "every hour please"})
+
+    def test_speech_without_an_endpoint_is_refused(self, tmp_path: Path) -> None:
+        """Enabled with nowhere to send it would fail once a week, silently."""
+        with pytest.raises(ValidationError, match=r"tts\.base_url is required"):
+            build(tmp_path, tts={"enabled": True})
+
+    def test_speech_off_needs_no_endpoint(self, tmp_path: Path) -> None:
+        assert build(tmp_path).tts.enabled is False
+
     def test_unknown_timezone(self, tmp_path: Path) -> None:
         with pytest.raises(ValidationError, match="unknown timezone"):
             build(tmp_path, scheduler={"timezone": "Mars/Olympus_Mons"})

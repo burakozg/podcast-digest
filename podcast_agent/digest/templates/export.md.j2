@@ -1,0 +1,40 @@
+{# One episode as a standalone, shareable Markdown file.
+
+   Same whitespace convention as digest.md.j2: lone plain {% %} tags only.
+
+   Deliberately not episode.md.j2. That one is a vault note — YAML frontmatter,
+   [[wikilinks]] to entity notes, and a backlink to the week it was published
+   in. All three are noise or dead links to someone who does not have the vault,
+   and this file exists to be handed to exactly that person. So: no frontmatter,
+   entities as plain text, and a provenance line instead of a backlink, because
+   the recipient did not run the pipeline and should not have to guess whether
+   this came off a full transcript or a press blurb. #}
+# {{ e.title }}
+
+*{{ e.podcast_name }} · {{ e.published_date }} · {{ e.duration }}{% if e.link %} · [episode link]({{ e.link }}){% endif %}*
+
+{% if e.why_it_matters %}
+**Why it matters:** {{ e.why_it_matters }}
+
+{% endif %}
+## Summary
+
+{{ e.summary_md }}
+
+{% if e.key_takeaways %}
+## Key takeaways
+
+{% for bullet in e.key_takeaways %}
+- {{ bullet }}
+{% endfor %}
+
+{% endif %}
+{% if e.entities %}
+## Mentioned
+
+{{ e.entities | join(' · ') }}
+
+{% endif %}
+---
+
+*Exported from Podcast Digest on {{ generated_date }}. Scored {{ e.score }}/10 against the reader's own interest profile; summarised from {{ e.basis_label }}.*

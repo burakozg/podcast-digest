@@ -126,8 +126,8 @@ external requests.
 | | |
 |---|---|
 | **`/admin`** | Operations: queue depths, feed health at a glance, LLM cost, and one-click runs of the scheduled jobs with an explanation of each |
-| **`/admin/digests`** | Reading view: the latest digest rendered, and every earlier week |
-| **`/admin/episodes`** | Episode browser, 50 per page, full-text search, star/read/wrong-call marking, with a legend explaining every status |
+| **`/admin/digests`** | Reading view: the latest digest rendered, and every earlier week, each with a *Read aloud* button |
+| **`/admin/episodes`** | Episode browser, 50 per page, full-text search, star/read/wrong-call marking, per-episode Markdown export, with a legend explaining every status |
 | **`/admin/podcasts`** | Podcasts: add, disable, and per-podcast ASR, priority, always-escalate, backfill mode and history window |
 | **`/admin/insights`** | What your reading says: precision report per podcast and interest, suggested (never applied) config edits, most-discussed entities, and content seeds |
 | **`/admin/backfill`** | Historical intake: start/pause the archive walk, per-podcast cursors and windows, cost estimates |
@@ -665,6 +665,8 @@ calling it twice does not repeat a mark.
 | `POST /api/v1/episodes/{id}/star` | Star or unstar |
 | `POST /api/v1/episodes/{id}/read` | Mark read or unread (stored as a timestamp) |
 | `POST /api/v1/episodes/{id}/feedback` | Flag the call as wrong (`over`/`under`) |
+| `GET /api/v1/episodes/{id}/export` | The summary as a standalone Markdown file to share (409 if there is none) |
+| `POST /api/v1/digests/{week}/narrate` | Read that week's digest aloud into an audio file beside it (`?force=`, `?wait=`) |
 | `GET /api/v1/search` | Full-text search over summaries and transcripts |
 | `GET /api/v1/search/status` · `POST .../sync` · `POST .../rebuild` | Search index state, incremental sync, full rebuild |
 | `GET /api/v1/insights/precision` | Precision report over stars/reads/flags (`?days=`) |

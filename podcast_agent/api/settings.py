@@ -25,6 +25,7 @@ from ..settings_store import (
     OVERRIDABLE_BACKFILL_KEYS,
     OVERRIDABLE_PIPELINE_KEYS,
     OVERRIDABLE_SECTIONS,
+    OVERRIDABLE_TTS_KEYS,
     OverrideRejected,
     get_state,
     pending_restart,
@@ -80,6 +81,7 @@ class SettingsIn(BaseModel):
     pipeline: dict[str, int] | None = None
     interest_profile: list[InterestIn] | None = None
     asr: dict[str, Any] | None = None
+    tts: dict[str, Any] | None = None
     backfill: dict[str, Any] | None = None
 
 
@@ -147,6 +149,7 @@ async def read_settings(request: Request) -> dict[str, Any]:
             key: getattr(settings.pipeline, key) for key in sorted(OVERRIDABLE_PIPELINE_KEYS)
         },
         "asr": {key: getattr(settings.asr, key) for key in sorted(OVERRIDABLE_ASR_KEYS)},
+        "tts": {key: getattr(settings.tts, key) for key in sorted(OVERRIDABLE_TTS_KEYS)},
         "backfill": {
             key: getattr(settings.backfill, key) for key in sorted(OVERRIDABLE_BACKFILL_KEYS)
         },
@@ -158,6 +161,13 @@ async def read_settings(request: Request) -> dict[str, Any]:
             "remote_url": settings.asr.remote_url,
         },
         "asr_installed": _asr_installed(),
+        # Where the speech server is, and how a digest is cut up for it: topology
+        # and machine protection, so neither is editable from a browser.
+        "tts_fixed": {
+            "base_url": settings.tts.base_url,
+            "max_chars_per_request": settings.tts.max_chars_per_request,
+            "timeout_s": settings.tts.timeout_s,
+        },
         "interest_profile": [
             {
                 "key": i.key,
@@ -203,6 +213,8 @@ async def write_settings(request: Request, body: Annotated[SettingsIn, Body()]) 
         overrides["interest_profile"] = [i.model_dump() for i in body.interest_profile]
     if body.asr is not None:
         overrides["asr"] = {**overrides.get("asr", {}), **body.asr}
+    if body.tts is not None:
+        overrides["tts"] = {**overrides.get("tts", {}), **body.tts}
     if body.backfill is not None:
         overrides["backfill"] = {**overrides.get("backfill", {}), **body.backfill}
 

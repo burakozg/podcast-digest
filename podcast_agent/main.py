@@ -31,6 +31,7 @@ from .config import Settings, load_settings
 from .db import CouchStore, Store, StoreError
 from .digest.archive import ArchiveDigestGenerator
 from .digest.generate import DigestGenerator
+from .digest.narrate import DigestNarrator
 from .ingest.feeds import Ingestor
 from .joblock import reclaim_local_leases
 from .llm import build_llm_client
@@ -45,6 +46,7 @@ from .scheduler import build_scheduler, drain_jobs, mark_shutting_down
 from .search import SearchIndex
 from .settings_store import allowed_api_base_hosts, check_api_bases, get_overrides, mark_applied
 from .signals import export_new_marks
+from .speech import build_speech_backend
 from .summarize.tier1 import Tier1Stage
 from .transcripts.acquire import TranscriptAcquirer
 from .transcripts.asr import build_asr_backend
@@ -184,6 +186,8 @@ def build_app(settings: Settings, *, store: Store | None = None, llm: Any = None
 
         asr_backend = build_asr_backend(active_settings.asr)
         app.state.asr_backend = asr_backend
+        speech_backend = build_speech_backend(active_settings.tts)
+        app.state.speech_backend = speech_backend
 
         # Output directories are created eagerly so a permissions problem shows
         # up at boot rather than at 06:00 on a Friday.
@@ -242,6 +246,7 @@ def build_app(settings: Settings, *, store: Store | None = None, llm: Any = None
                 registry=registry,
             ),
             archive=ArchiveDigestGenerator(active_settings, active_store, registry),
+            narrator=DigestNarrator(active_settings, active_store, speech_backend),
         )
         app.state.runner = runner
         retention = RetentionJob(active_settings, active_store)
@@ -252,8 +257,24 @@ def build_app(settings: Settings, *, store: Store | None = None, llm: Any = None
             written into the vault where anything else can read them."""
             return await export_new_marks(active_store, active_settings)
 
+        async def narrate_newest() -> dict[str, Any]:
+            """Hourly: read the newest digest aloud if it has no audio yet.
+
+            Never a specific week — an hourly job that could name one would walk
+            backwards through the archive. Older weeks are narrated only when a
+            person asks for one from the console.
+            """
+            return await runner.narrate_digest()
+
         scheduler = build_scheduler(
-            active_settings, runner, retention, app.state.search, signals=export_signals
+            active_settings,
+            runner,
+            retention,
+            app.state.search,
+            signals=export_signals,
+            # Not registered at all when text-to-speech is off, so a disabled
+            # feature costs no wakeups.
+            narrate=narrate_newest if active_settings.tts.enabled else None,
         )
         scheduler.start()
         app.state.scheduler = scheduler
@@ -266,6 +287,7 @@ def build_app(settings: Settings, *, store: Store | None = None, llm: Any = None
             digest_dir=str(active_settings.output.digest_dir),
             timezone=active_settings.scheduler.timezone,
             asr_backend=active_settings.asr.backend,
+            tts=active_settings.tts.enabled,
         )
 
         if active_settings.scheduler.run_on_startup:
@@ -307,6 +329,7 @@ def build_app(settings: Settings, *, store: Store | None = None, llm: Any = None
                         await asyncio.gather(*running, return_exceptions=True)
             await http_client.aclose()
             await asr_backend.close()
+            await speech_backend.close()
             closer = getattr(active_llm, "close", None)
             if closer is not None:
                 await closer()

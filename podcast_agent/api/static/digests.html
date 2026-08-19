@@ -121,6 +121,7 @@
   <h1>Digests</h1>
   <span class="pill" id="count"></span>
   <span style="flex:1"></span>
+  <button id="narrateBtn" title="Synthesise this week as an audio file beside the Markdown">Read aloud</button>
   <button id="rawBtn">View Markdown</button>
   <button id="reload">Refresh</button>
   <button id="forget">Forget key</button>
@@ -223,6 +224,15 @@
       el.addEventListener("click", () => open(el.dataset.week, Number(el.dataset.run))));
   }
 
+  // The narration recorded against the *selected* run, not the week: a week
+  // generated twice has two files, and only one of them has been read aloud.
+  function narrationOf() {
+    if (!current) return null;
+    const runs = current.runs || [];
+    const chosen = runs[(current.run || runs.length) - 1];
+    return (chosen && chosen.narration) || null;
+  }
+
   function renderDigest() {
     if (!current) {
       $("facts").innerHTML = "";
@@ -246,6 +256,15 @@
     if (!current.marking_complete) {
       facts.push("incomplete — generation was interrupted");
     }
+    const narration = narrationOf();
+    if (narration) {
+      const mb = (Number(narration.bytes || 0) / 1048576).toFixed(1);
+      // Named, not linked: the file lives in the vault, which the console does
+      // not serve. Obsidian plays it from the note itself.
+      facts.push(`audio ${String(narration.audio_path || "").split("/").pop()} · ${mb} MB`);
+    }
+    $("narrateBtn").textContent = narration ? "Read aloud again" : "Read aloud";
+    $("narrateBtn").disabled = !current;
     $("facts").innerHTML = facts.map((f) =>
       `<span class="pill${f.startsWith("incomplete") ? " warn" : ""}">${esc(f)}</span>`).join("");
 
@@ -258,6 +277,25 @@
       $("body").innerHTML = current.html;
     }
     $("rawBtn").textContent = raw ? "View rendered" : "View Markdown";
+  }
+
+  async function narrate() {
+    if (!current) return;
+    const again = Boolean(narrationOf());
+    if (again && !confirm(
+        "This run already has audio. Generate it again, replacing the file?")) return;
+    const button = $("narrateBtn");
+    button.disabled = true;
+    say("Reading it aloud — this takes a few minutes on a long week.");
+    try {
+      await api(`/api/v1/digests/${encodeURIComponent(current.period_key)}/narrate?force=${
+        again ? "true" : "false"}`, { method: "POST" });
+      say("Started. The audio lands beside the digest in your vault; refresh to see it.");
+    } catch (err) {
+      if (err.message !== "unauthorised") say(`Read aloud failed: ${err.message}`, "err");
+    } finally {
+      button.disabled = false;
+    }
   }
 
   async function open(week, run = 0) {
@@ -314,6 +352,7 @@
   $("key").addEventListener("keydown", (e) => { if (e.key === "Enter") unlock(); });
   $("reload").addEventListener("click", load);
   $("forget").addEventListener("click", () => lock("Key cleared."));
+  $("narrateBtn").addEventListener("click", narrate);
   $("rawBtn").addEventListener("click", () => { raw = !raw; renderDigest(); });
 
   if (key()) start(); else $("gate").hidden = false;

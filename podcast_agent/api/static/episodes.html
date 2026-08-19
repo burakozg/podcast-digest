@@ -281,6 +281,9 @@
   <div class="controls" style="margin:.8rem 0">
     <button id="dStar">☆ Star</button>
     <button id="dRead">Mark read</button>
+    <!-- Hidden until there is a summary: the file would otherwise be a title
+         and a provenance line, which is not something anyone means to send. -->
+    <button id="dExport" hidden title="Download this summary as a Markdown file to share">⤓ Export Markdown</button>
     <!-- Two directions, because they mean opposite things. "Should not have
          been here" is a false positive; "should have been" is a false negative,
          and nobody ever sees what they were not shown. -->
@@ -591,6 +594,7 @@
   function renderSignals(e) {
     $("dStar").textContent = e.starred ? "★ Starred" : "☆ Star";
     $("dRead").textContent = e.read_at ? "Mark unread" : "Mark read";
+    $("dExport").hidden = !e.has_summary;
     const fb = e.feedback;
     $("dWrongClear").hidden = !fb;
     $("dFeedback").textContent = fb
@@ -619,6 +623,28 @@
       if (selected === id) await openEpisode(id);
     } catch (err) {
       say(`Star failed: ${err.message}`, "err");
+    }
+  }
+
+  // The key lives in sessionStorage and travels as a header, so a plain
+  // <a download> cannot fetch this — the page pulls the Markdown itself and
+  // hands the browser a Blob to save.
+  async function exportMarkdown() {
+    if (!selected) return;
+    try {
+      const body = await api(`/api/v1/episodes/${encodeURIComponent(selected)}/export`);
+      const url = URL.createObjectURL(
+        new Blob([body.markdown], { type: "text/markdown;charset=utf-8" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = body.filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Deferred: revoking in the same tick can cancel the download in Safari.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (err) {
+      say(`Export failed: ${err.message}`, "err");
     }
   }
 
@@ -708,6 +734,7 @@
     const e = episodes.find((x) => x._id === selected);
     signal(`read?read=${e && e.read_at ? "false" : "true"}`, "Mark read");
   });
+  $("dExport").addEventListener("click", exportMarkdown);
   $("dWrongOver").addEventListener("click", () => flagWrong("over"));
   $("dWrongUnder").addEventListener("click", () => flagWrong("under"));
   $("dWrongClear").addEventListener("click", () => flagWrong(null));

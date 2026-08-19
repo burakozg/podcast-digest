@@ -152,6 +152,12 @@ class SchedulerConfig(StrictModel):
     #: of alongside it. Cheap: it pages episode documents and only fetches a
     #: transcript for an episode whose content actually changed.
     search_cron: str = "15,45 * * * *"
+    #: Reading the newest digest aloud. Hourly rather than weekly, and not an
+    #: offset from `digest_cron`, because the machine that synthesises is a
+    #: laptop that sleeps: a once-a-week fire that found it shut would wait a
+    #: week to retry. The job is idempotent — it returns after one document read
+    #: when the audio is already there — so an idle hour costs nothing.
+    narrate_cron: str = "20 * * * *"
     #: Kick ingest+pipeline once at boot (useful for a fresh deployment).
     run_on_startup: bool = False
 
@@ -177,6 +183,7 @@ class SchedulerConfig(StrictModel):
             "signals_cron",
             "backfill_cron",
             "search_cron",
+            "narrate_cron",
         ):
             expr = getattr(self, field)
             try:
@@ -348,6 +355,40 @@ class ASRConfig(StrictModel):
     def _remote_needs_url(self) -> ASRConfig:
         if self.backend == "remote" and not self.remote_url:
             raise ValueError("asr.remote_url is required when asr.backend is 'remote'")
+        return self
+
+
+class TTSConfig(StrictModel):
+    """Reading the weekly digest aloud (§5).
+
+    The mirror image of :class:`ASRConfig`, and deliberately shaped like its
+    remote half: one HTTP call to an OpenAI-compatible ``/v1/audio/speech``
+    endpoint, so the engine behind it is a URL rather than a dependency.
+    """
+
+    enabled: bool = False
+    backend: Literal["remote"] = "remote"
+    base_url: str | None = None
+    model: str = "kokoro"
+    voice: str = "af_heart"
+    #: Deliberately no `wav`, which every OpenAI-shaped server also offers. A
+    #: digest is synthesised in chunks and the pieces are concatenated, which is
+    #: correct for a self-framing stream (MP3 frames, chained Ogg pages) and
+    #: silently wrong for RIFF: the first chunk's header declares its own length,
+    #: so a player stops there and the rest of the week is simply not heard.
+    response_format: Literal["mp3", "opus"] = "mp3"
+    speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    #: OpenAI's speech API caps `input` at 4096 characters and Kokoro-FastAPI
+    #: follows it, so a digest is split before it is sent. Chunking is ours.
+    max_chars_per_request: int = Field(default=3000, ge=500, le=4096)
+    #: One request covers one chunk — minutes, not the 45 an ASR decode can
+    #: take, which is why this is far shorter than `asr.remote_timeout_s`.
+    timeout_s: int = Field(default=600, ge=30, le=7200)
+
+    @model_validator(mode="after")
+    def _enabled_needs_url(self) -> TTSConfig:
+        if self.enabled and not self.base_url:
+            raise ValueError("tts.base_url is required when tts.enabled is true")
         return self
 
 
@@ -545,6 +586,7 @@ class Settings(BaseSettings):
     backfill: BackfillConfig = Field(default_factory=BackfillConfig)
     llm: LLMConfig
     asr: ASRConfig = Field(default_factory=ASRConfig)
+    tts: TTSConfig = Field(default_factory=TTSConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     couchdb: CouchDBConfig = Field(default_factory=CouchDBConfig)
     api: APIConfig = Field(default_factory=APIConfig)

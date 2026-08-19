@@ -124,6 +124,51 @@ PODAGENT_PIPELINE__MAX_SUMMARIES_PER_RUN=1 \
 PODAGENT_CONFIG_FILE=config.local.yaml uv run podcast-agent
 ```
 
+## Reading the digest aloud (Kokoro)
+
+Speech synthesis runs as a **separate service on this machine**, not inside the
+agent — the same arrangement as remote ASR, and for the same reason: the NAS has
+~3 GB free shared with Home Assistant, and the Mac is the box that can do this
+work. The agent only ever holds a URL.
+
+Kokoro-82M is the model: Apache-2.0, ~1 GB resident, faster than real time on
+CPU alone. `Kokoro-FastAPI` wraps it in an OpenAI-compatible
+`/v1/audio/speech`, which is the one thing the agent knows how to speak.
+
+```bash
+brew install espeak-ng
+git clone https://github.com/remsky/Kokoro-FastAPI && cd Kokoro-FastAPI
+PYTORCH_ENABLE_MPS_FALLBACK=1 ./start-gpu_mac.sh      # uv + Metal, :8880
+```
+
+Native rather than Docker: the published GPU image is CUDA-only and will not run
+on Apple Silicon at all, and the CPU image gives up Metal entirely. If the native
+script misbehaves — there are open Apple-Silicon issues against that repo — the
+`docker/cpu` compose path in the same clone works and is a slowdown, not a
+blocker. Confirm it before involving the agent:
+
+```bash
+curl -s localhost:8880/v1/audio/speech -H 'Content-Type: application/json' \
+  -d '{"model":"kokoro","input":"Testing.","voice":"af_heart","response_format":"mp3"}' \
+  --output /tmp/t.mp3 && afplay /tmp/t.mp3
+```
+
+Then point the agent at it and turn it on:
+
+```bash
+export PODAGENT_TTS__ENABLED=true PODAGENT_TTS__BASE_URL=http://127.0.0.1:8880
+```
+
+The audio lands beside the Markdown in the digest directory, with a player
+embedded in the note. **Only the newest digest is ever narrated automatically** —
+the hourly job reads that one and stops, so a year of archives is never swept up.
+Older weeks are one click on `/admin/digests`.
+
+The hourly cadence is not about the digest, which is weekly. It is about this
+machine: a job that fired once on Friday morning and found the lid shut would
+wait a week to retry. It returns after a single document read when the audio is
+already there.
+
 ## Model notes (learned the hard way on this machine)
 
 **These apply to the local Ollama setup, which is currently not in use.** They

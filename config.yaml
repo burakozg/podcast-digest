@@ -162,6 +162,7 @@ scheduler:
   pipeline_cron: "*/30 * * * *"     # every 30 minutes
   digest_cron: "0 6 * * fri"        # Friday 06:00 local
   retention_cron: "0 4 * * *"       # daily 04:00 local
+  narrate_cron: "20 * * * *"        # hourly; does nothing unless tts.enabled
   run_on_startup: false
 
 pipeline:
@@ -285,6 +286,22 @@ asr:
   asr_concurrency: 1          # never more than 1 on the NAS
   download_concurrency: 2
   remote_url: null
+
+# Reading the weekly digest aloud. Off by default: it needs a speech server,
+# and there is no sensible default address for one. Point base_url at anything
+# speaking OpenAI's /v1/audio/speech -- Kokoro-FastAPI is the intended one and
+# runs on the Mac beside the ASR server. Set it via PODAGENT_TTS__BASE_URL
+# rather than here: it is deployment topology, like asr.remote_url.
+tts:
+  enabled: false
+  backend: remote
+  base_url: null
+  model: kokoro
+  voice: af_heart
+  response_format: mp3        # mp3 | opus; both concatenate, wav would not
+  speed: 1.0
+  max_chars_per_request: 3000
+  timeout_s: 600
 
 output:
   digest_dir: /data/digests

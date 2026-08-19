@@ -83,6 +83,16 @@ services:
       # benign either way: unreachable raises ASRUnavailable, so episodes stay
       # queued and spend no retry budget.
       PODAGENT_ASR__REMOTE_URL: "${ASR_REMOTE_URL:-http://transcriber.local:8000}"
+      # Where the digest is read aloud, on the same machine and for the same
+      # reason. Speech synthesis is far lighter than Whisper, but this box has
+      # ~3 GB free shared with Home Assistant and the rest, and a model that
+      # wants a gigabyte resident is not a good neighbour.
+      #
+      # `tts.enabled` belongs in the console override rather than here, exactly
+      # as `asr.backend` does: an override merges on top of these vars, so
+      # setting it here could be silently overwritten. Unreachable is benign —
+      # the job raises SpeechUnavailable and the next hourly fire retries.
+      PODAGENT_TTS__BASE_URL: "${TTS_URL:-http://transcriber.local:8880}"
     volumes:
       # Replaces the podcast-work named volume from the base file. Same target
       # path, so this entry supersedes it rather than adding a second mount.

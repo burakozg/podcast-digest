@@ -24,7 +24,14 @@ from ..episodes import transition
 from ..llm.base import StructuredLLM
 from ..logging_setup import get_logger
 from ..models import WeeklySynthesis
-from ..sanitize import md_escape_inline, md_escape_table_cell, safe_url, sanitize_md_block, slugify
+from ..sanitize import (
+    md_escape_inline,
+    md_escape_table_cell,
+    md_to_speech_text,
+    safe_url,
+    sanitize_md_block,
+    slugify,
+)
 from ..state import AUDIT_ONLY_STATUSES, DIGESTABLE_STATUSES, EpisodeStatus
 from ..utils import digest_doc_id, format_duration, iso, iso_now, parse_iso, utcnow
 from .synthesis import WeeklySynthesizer, as_view, previous_theme_titles
@@ -77,13 +84,17 @@ def _build_env() -> Environment:
     autoescape off: the output is Markdown, and every interpolated value is
     sanitised for a Markdown context before it reaches the template.
     """
-    return Environment(  # noqa: S701
+    env = Environment(  # noqa: S701
         loader=FileSystemLoader(str(TEMPLATE_DIR)),
         undefined=StrictUndefined,
         trim_blocks=True,
         lstrip_blocks=False,
         keep_trailing_newline=True,
     )
+    # For the spoken script, which needs the same values with their Markdown
+    # taken back off — a synthesiser reads `**bold**` aloud as punctuation.
+    env.filters["speech"] = md_to_speech_text
+    return env
 
 
 def _interest_labels(settings: Settings, keys: list[str] | None) -> list[str]:
@@ -137,6 +148,20 @@ def _episode_views(
             "reasoning": md_escape_inline(tier0.get("reasoning") or "", max_chars=240),
         }
 
+    return summary_view(settings, episode, basis_labels)
+
+
+def summary_view(settings: Settings, episode: Doc, basis_labels: dict[str, str]) -> dict[str, Any]:
+    """The template view of a *summarised* episode.
+
+    Split out of :func:`_episode_views` so the ad-hoc Markdown export can reach
+    it directly. That path has already established the episode has a summary,
+    and must not be routed through the status branching above — a DIGEST_DIRECT
+    episode that was later summarised on request would otherwise come back in
+    the one-liner shape, with no ``summary_md`` at all.
+    """
+    tier1 = episode.get("tier1") or {}
+    published = (episode.get("published_at") or "")[:10] or "unknown date"
     basis = str(tier1.get("summary_basis") or "description_only")
     return {
         "episode_id": episode["_id"],

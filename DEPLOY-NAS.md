@@ -123,9 +123,17 @@ PODAGENT_ASR__MODEL=small.en
 # budget. Pair with `backend: remote` in the console's ASR settings, and a
 # model name the server actually has installed.
 ASR_REMOTE_URL=http://transcriber.local:8000
+
+# The machine that reads the weekly digest aloud, over the OpenAI speech API.
+# The same box as ASR: speech is far lighter than Whisper, but a model wanting a
+# gigabyte resident is a bad neighbour to Home Assistant on 3 GB free. Off until
+# `enabled` is set in the console -- see RUNNING-ON-MAC.md for the Kokoro side.
+# Unreachable is benign: the hourly job retries, and it only ever narrates the
+# newest digest, never the archive.
+TTS_URL=http://transcriber.local:8880
 EOF
 
-ssh -p $P $NAS "grep -c '^[A-Z]' $APP/.env"     # expect 11 assignments
+ssh -p $P $NAS "grep -c '^[A-Z]' $APP/.env"     # expect 12 assignments
 ```
 
 > **You need an Anthropic API key before this will start.** `config.yaml` puts an

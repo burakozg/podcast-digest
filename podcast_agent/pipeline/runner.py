@@ -25,6 +25,7 @@ from ..config import Settings
 from ..db import Doc, Store, typed_sort
 from ..digest.archive import ArchiveDigestGenerator
 from ..digest.generate import DigestGenerator, DigestResult
+from ..digest.narrate import DigestNarrator
 from ..episodes import mark_error, transition
 from ..ingest.feeds import Ingestor
 from ..joblock import LeaseLost, held
@@ -100,6 +101,10 @@ class RecentWorkCheck:
         return self._last_value
 
 
+class NarrationUnconfigured(Exception):
+    """Text-to-speech is off, so there is no narrator to ask."""
+
+
 class JobBusy(Exception):
     """This job is already running.
 
@@ -159,6 +164,7 @@ class PipelineRunner:
         backfill_ingest: BackfillIngestor | None = None,
         backfill_process: BackfillProcessor | None = None,
         archive: ArchiveDigestGenerator | None = None,
+        narrator: DigestNarrator | None = None,
     ) -> None:
         self._settings = settings
         self._store = store
@@ -171,6 +177,7 @@ class PipelineRunner:
         self._backfill_ingest = backfill_ingest
         self._backfill_process = backfill_process
         self._archive = archive
+        self._narrator = narrator
         self.last_runs: dict[str, dict[str, Any]] = {}
         #: Episodes being summarised on demand, so the same one cannot be
         #: triggered twice concurrently from an impatient click.
@@ -178,7 +185,8 @@ class PipelineRunner:
         #: Strong references to in-flight run-record writes.
         self._run_records: set[asyncio.Task[None]] = set()
         self._locks: dict[str, asyncio.Lock] = {
-            job: asyncio.Lock() for job in ("ingest", "pipeline", "digest", "rescore", "backfill")
+            job: asyncio.Lock()
+            for job in ("ingest", "pipeline", "digest", "rescore", "backfill", "narrate")
         }
 
     def is_running(self, job: str) -> bool:
@@ -296,6 +304,29 @@ class PipelineRunner:
             return result
         finally:
             clear_run_context()
+
+    async def narrate_digest(
+        self, period_key: str | None = None, *, force: bool = False
+    ) -> dict[str, Any]:
+        """Read a digest aloud into a file beside it.
+
+        Under the same lock discipline as every other job so the hourly fire and
+        an impatient click cannot both synthesise the same week — which would
+        have two writers racing for one temp file.
+        """
+        if self._narrator is None:
+            raise NarrationUnconfigured("text-to-speech is not enabled")
+        async with self._exclusive("narrate"):
+            run_id = new_run_id()
+            bind_run(run_id, job="narrate")
+            try:
+                summary = (await self._narrator.narrate(period_key, force=force)).as_dict()
+                log.info("run.narrate_summary", **summary)
+                if not summary["skipped"]:
+                    self._remember("narrate", summary)
+                return summary
+            finally:
+                clear_run_context()
 
     async def run_backfill(
         self, *, dry_run: bool = True, confirm: bool = False, force: bool = False

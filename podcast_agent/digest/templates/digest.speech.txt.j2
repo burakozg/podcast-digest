@@ -1,0 +1,87 @@
+{# The weekly digest as a script to be read aloud.
+
+   Same whitespace convention as digest.md.j2: lone plain {% %} tags only.
+
+   This is a sibling of that template, not a variant of it. What survives being
+   spoken is a different set from what reads well on a page: no scores (a
+   listener cannot compare "eight out of ten" to anything), no links, no
+   interests-matched line, no basis label, no entity list, and none of the
+   audit material at all — `maybe_interesting` is a bullet list and
+   `everything_else` is a table, and both are unlistenable by construction.
+
+   Blank lines are the pause cues, so they are load-bearing here in a way they
+   are not in prose. Every value passes through `| speech`, which strips the
+   Markdown a synthesiser would otherwise pronounce character by character. #}
+Podcast digest for week {{ week_number }}, {{ year }}. {{ stats.summarized }} episode{{ '' if stats.summarized == 1 else 's' }} summarised out of {{ stats.scanned }} scanned.
+
+{% if not (top_picks or also_relevant) %}
+Nothing was summarised in this period.
+
+{% endif %}
+{% if synthesis %}
+Across the week.
+
+{% for t in synthesis.themes %}
+{{ t.title | speech }}.{% if t.shows %} Heard on {{ t.shows | join(', ') }}.{% endif %}
+
+{{ t.summary | speech }}
+
+{% endfor %}
+{% if synthesis.disagreements %}
+Where they disagreed.
+
+{% for line in synthesis.disagreements %}
+{{ line | speech }}
+
+{% endfor %}
+{% endif %}
+{% if synthesis.whats_new %}
+New since last week.
+
+{% for line in synthesis.whats_new %}
+{{ line | speech }}
+
+{% endfor %}
+{% endif %}
+{% endif %}
+{% if top_picks %}
+Top picks.
+
+{% for e in top_picks %}
+From {{ e.podcast_name | speech }}: {{ e.title | speech }}.
+
+{% if e.why_it_matters %}
+Why it matters. {{ e.why_it_matters | speech }}
+
+{% endif %}
+{{ e.summary_md | speech }}
+
+{% if e.key_takeaways %}
+Key takeaways.
+
+{% for bullet in e.key_takeaways %}
+{{ bullet | speech }}
+
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if also_relevant %}
+Also relevant.
+
+{% for e in also_relevant %}
+From {{ e.podcast_name | speech }}: {{ e.title | speech }}.
+
+{% if e.why_it_matters %}
+Why it matters. {{ e.why_it_matters | speech }}
+
+{% endif %}
+{% if e.key_takeaways %}
+{% for bullet in e.key_takeaways[:4] %}
+{{ bullet | speech }}
+
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% endif %}
+That is the digest for week {{ week_number }}.

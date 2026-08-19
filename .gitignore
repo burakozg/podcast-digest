@@ -34,3 +34,7 @@ config.local.yaml
 
 # Local deploy config (real NAS host — see deploy.env.example)
 .deploy.env
+
+# Speech server, cloned here for convenience (RUNNING-ON-MAC.md). 1.5 GB of
+# someone else's repo, with its own .git — never part of this one.
+/Kokoro-FastAPI/

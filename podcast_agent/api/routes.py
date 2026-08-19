@@ -26,7 +26,9 @@ from ..content import render as render_seeds
 from ..content import select as select_seed_episodes
 from ..content import write as write_seeds
 from ..db import TRANSCRIPT_ATTACHMENT, Doc, Selector, Store, typed_sort
-from ..digest.read import DigestUnreadable, read_digest
+from ..digest.export import episode_markdown, export_filename
+from ..digest.narrate import NothingToNarrate
+from ..digest.read import DigestUnreadable, digest_period_key, digest_runs, read_digest
 from ..entities import (
     DEFAULT_MIN_MENTIONS,
     aggregate,
@@ -804,6 +806,26 @@ async def read_episode(
     return {"episode_id": doc["_id"], **feedback_view(updated)}
 
 
+@api_router.get("/episodes/{episode_id}/export", summary="One episode as shareable Markdown")
+async def export_episode(request: Request, episode_id: str) -> dict[str, Any]:
+    """The Markdown, plus the filename to save it under.
+
+    JSON rather than ``text/markdown`` with a ``Content-Disposition`` header
+    because the console authenticates with an ``X-API-Key`` header: a plain
+    ``<a download>`` navigation carries no headers, so the page has to fetch the
+    body itself and hand the browser a Blob — at which point the header would be
+    discarded and the filename has to arrive as data anyway.
+    """
+    doc = await _require_episode(request, episode_id)
+    if not (doc.get("tier1") or {}).get("summary_md"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="no summary to export")
+    return {
+        "episode_id": doc["_id"],
+        "filename": export_filename(doc),
+        "markdown": episode_markdown(_settings(request), doc),
+    }
+
+
 @api_router.post("/episodes/{episode_id}/feedback", summary="Say the call was wrong")
 async def episode_feedback(
     request: Request, episode_id: str, body: Annotated[FeedbackIn, Body()]
@@ -1353,36 +1375,11 @@ def _finalize(buckets: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
 # --- digests ----------------------------------------------------------------
 
 
-def _digest_period_key(doc: Doc) -> str:
-    """``digest:2026-W31`` → ``2026-W31``."""
-    return str(doc.get("_id", "")).split(":", 1)[-1]
-
-
-def _digest_runs(doc: Doc) -> list[dict[str, Any]]:
-    """Every generation for this week, oldest first.
-
-    Documents written before runs were recorded have none, so the top-level
-    fields stand in for the single run they describe.
-    """
-    runs = list(doc.get("runs") or [])
-    if runs:
-        return runs
-    return [
-        {
-            "file_path": doc.get("file_path"),
-            "period": doc.get("period") or {},
-            "episode_ids": doc.get("episode_ids") or [],
-            "stats": doc.get("stats") or {},
-            "generated_at": doc.get("generated_at"),
-        }
-    ]
-
-
 def _digest_summary(doc: Doc) -> dict[str, Any]:
     period = doc.get("period") or {}
     return {
         "digest_id": doc["_id"],
-        "period_key": _digest_period_key(doc),
+        "period_key": digest_period_key(doc),
         "period": period,
         "from": period.get("from"),
         "to": period.get("to"),
@@ -1403,8 +1400,11 @@ def _digest_summary(doc: Doc) -> dict[str, Any]:
                 "to": (run.get("period") or {}).get("to"),
                 "episodes": len(run.get("episode_ids") or []),
                 "generated_at": run.get("generated_at"),
+                # Present once this run has been read aloud; the console shows
+                # the file and hides its "Generate audio" button on it.
+                "narration": run.get("narration"),
             }
-            for index, run in enumerate(_digest_runs(doc))
+            for index, run in enumerate(digest_runs(doc))
         ],
     }
 
@@ -1420,7 +1420,7 @@ async def list_digests(
     # gives it the newest `generated_at`, which would otherwise shuffle it to the
     # top of a list whose whole purpose is to read as a calendar. ISO week keys
     # sort correctly as strings.
-    ordered = sorted(docs, key=_digest_period_key, reverse=True)
+    ordered = sorted(docs, key=digest_period_key, reverse=True)
     return {
         "count": len(ordered),
         "digests": [_digest_summary(d) for d in ordered],
@@ -1444,7 +1444,7 @@ async def get_digest(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"no digest for {period_key}"
         )
-    runs = _digest_runs(doc)
+    runs = digest_runs(doc)
     if run > len(runs):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1486,6 +1486,44 @@ async def get_digest(
         log.warning("digest.unreadable", period_key=period_key, error=str(exc))
         raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
     return {**summary, **content}
+
+
+@api_router.post("/digests/{period_key}/narrate", summary="Read a digest aloud")
+async def narrate_digest(
+    request: Request,
+    period_key: str,
+    force: bool = Query(default=False, description="Re-synthesise even if audio exists"),
+    wait: bool = Query(default=False, description="Block until it finishes"),
+) -> dict[str, Any]:
+    """Synthesise this week's digest into an audio file beside its Markdown.
+
+    Naming a week is the *only* way to narrate one that is not the newest — the
+    scheduled job deliberately cannot, so nothing ever works backwards through
+    the archive on its own.
+    """
+    settings: Settings = request.app.state.settings
+    if not settings.tts.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="text-to-speech is disabled; set tts.enabled and tts.base_url",
+        )
+    if await _store(request).get(digest_doc_id(period_key)) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"no digest for {period_key}"
+        )
+    runner = _runner(request)
+    try:
+        return await _launch(
+            request,
+            "narrate",
+            lambda: runner.narrate_digest(period_key, force=force),
+            wait,
+        )
+    except NothingToNarrate as exc:
+        # Only reachable with wait=true; in the background the task logs it. A
+        # week whose episodes were all one-liners has nothing to read aloud, and
+        # that is a fact about the week, not a failure.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 # --- activity: logs, job runs, model calls -----------------------------------

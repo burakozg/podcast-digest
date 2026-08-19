@@ -46,6 +46,31 @@ def resolve_within(digest_dir: Path, relative: str) -> Path:
     return candidate
 
 
+def digest_period_key(doc: dict[str, Any]) -> str:
+    """``digest:2026-W31`` → ``2026-W31``."""
+    return str(doc.get("_id", "")).split(":", 1)[-1]
+
+
+def digest_runs(doc: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every generation for this week, oldest first.
+
+    Documents written before runs were recorded have none, so the top-level
+    fields stand in for the single run they describe.
+    """
+    runs = list(doc.get("runs") or [])
+    if runs:
+        return runs
+    return [
+        {
+            "file_path": doc.get("file_path"),
+            "period": doc.get("period") or {},
+            "episode_ids": doc.get("episode_ids") or [],
+            "stats": doc.get("stats") or {},
+            "generated_at": doc.get("generated_at"),
+        }
+    ]
+
+
 def split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     """Separate the YAML frontmatter from the Markdown body.
 

@@ -138,6 +138,24 @@
   </section>
 
   <section>
+    <h2>Reading the digest aloud</h2>
+    <p class="sub" style="margin:-.35rem 0 .8rem">
+      The reverse of transcription: the weekly digest is synthesised into an
+      audio file that lands <strong>next to the Markdown in your vault</strong>,
+      with a player embedded in the note. Nothing is served over HTTP — the
+      vault already syncs.
+      <br><br>
+      Synthesis happens on whichever machine answers at the address below, over
+      the OpenAI speech API. The job runs hourly and does nothing unless the
+      newest digest has no audio yet, so a laptop that was asleep costs a delay
+      and nothing else. <strong>Older weeks are never narrated automatically</strong>;
+      use <em>Read aloud</em> on <a href="/admin/digests">Digests</a> for those.
+    </p>
+    <div class="addgrid" id="tts"></div>
+    <p class="sub" id="ttsFixed" style="margin:.8rem 0 0"></p>
+  </section>
+
+  <section>
     <h2>Historical intake</h2>
     <p class="sub" style="margin:-.35rem 0 .8rem">
       Whether the archive transcribes a podcast is decided per podcast, by the
@@ -386,7 +404,7 @@
     ["beam_size", "Beam size", "number", null,
      "1 is greedy decoding. Higher is slightly better and proportionally slower."],
     ["backend", "Backend", "select", ["local", "remote"],
-     "remote is a placeholder in v1 and needs asr.remote_url in config.yaml."],
+     "remote sends the audio to the machine at asr.remote_url instead of decoding here."],
     ["keep_audio", "Keep audio", "check", null,
      "Leaves the downloaded file on disk after transcribing. For debugging only."],
   ];
@@ -418,6 +436,53 @@
       : `<strong style="color:var(--bad)">faster-whisper is not installed in this
          process</strong>, so local transcription cannot run whatever is set here —
          install the <code>asr</code> extra. ${esc(caps)}`;
+  }
+
+  const TTS_FIELDS = [
+    ["enabled", "Enabled", "check", null,
+     "Off means the hourly job is not even registered, so it costs nothing."],
+    ["voice", "Voice", "select",
+     ["af_heart", "af_bella", "af_nicole", "am_michael", "am_fenrir",
+      "bf_emma", "bf_isabella", "bm_george", "bm_lewis"],
+     "Kokoro's presets. a = American, b = British; f and m are the speaker."],
+    ["speed", "Speed", "select", ["0.9", "1.0", "1.1", "1.25", "1.5"],
+     "Applied at synthesis, so it is baked into the file. Your player can still change it."],
+    ["model", "Model", "text", null,
+     "Whatever the server calls its model. Kokoro-FastAPI answers to kokoro."],
+    ["response_format", "Format", "select", ["mp3", "opus"],
+     "mp3 unless you have a reason. Both survive being stitched from chunks; wav would not, so it is not offered."],
+  ];
+
+  //: Which TTS values must go back as numbers rather than strings. Selects
+  //: always read as text, and `speed: "1.25"` fails validation server-side.
+  const TTS_NUMERIC = new Set(["speed"]);
+
+  function renderTTS(tts, fixed) {
+    $("tts").innerHTML = TTS_FIELDS.map(([k, label, kind, options, help]) => {
+      const value = tts[k];
+      let control;
+      if (kind === "select") {
+        const list = options.includes(String(value)) ? options : [...options, String(value)];
+        control = `<select data-t="${k}" style="width:100%">${list.map((o) =>
+          `<option${String(o) === String(value) ? " selected" : ""}>${esc(o)}</option>`
+        ).join("")}</select>`;
+      } else if (kind === "check") {
+        control = `<input data-t="${k}" type="checkbox"${value ? " checked" : ""}>`;
+      } else {
+        control = `<input data-t="${k}" type="${kind}" value="${esc(value ?? "")}" style="width:100%">`;
+      }
+      return `<label class="sub">${esc(label)}<br>${control}
+        <span style="display:block;margin-top:.2rem">${esc(help)}</span></label>`;
+    }).join("");
+
+    const where = fixed.base_url
+      ? `Speech server: ${fixed.base_url}.`
+      : "No speech server is configured, so this cannot run whatever is set here — " +
+        "set PODAGENT_TTS__BASE_URL.";
+    $("ttsFixed").innerHTML = esc(
+      `${where} Split into ${fixed.max_chars_per_request}-character requests, ` +
+      `${fixed.timeout_s}s each. The address is deployment topology and the ` +
+      `chunking protects the server, so both stay out of the browser.`);
   }
 
   const BACKFILL_FIELDS = [
@@ -518,12 +583,20 @@
       else asr[k] = el.value.trim() === "" ? null : el.value.trim();
     });
 
+    const tts = {};
+    document.querySelectorAll("[data-t]").forEach((el) => {
+      const k = el.dataset.t;
+      if (el.type === "checkbox") tts[k] = el.checked;
+      else if (TTS_NUMERIC.has(k)) tts[k] = Number(el.value);
+      else tts[k] = el.value.trim();
+    });
+
     const backfill = {};
     document.querySelectorAll("[data-b]").forEach((el) => {
       backfill[el.dataset.b] = Number(el.value);
     });
 
-    return { tiers, pipeline, interest_profile, asr, backfill };
+    return { tiers, pipeline, interest_profile, asr, tts, backfill };
   }
 
   function since(iso) {
@@ -558,6 +631,7 @@
       renderTiers(current.tiers);
       renderThresholds(current.pipeline);
       renderASR(current.asr, current.asr_fixed, current.asr_installed);
+      renderTTS(current.tts, current.tts_fixed);
       renderBackfill(current.backfill);
       renderInterests(current.interest_profile);
       renderPending(current);

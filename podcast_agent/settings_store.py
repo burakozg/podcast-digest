@@ -37,7 +37,16 @@ SETTINGS_DOC_ID = "control:settings"
 #: (point digests at a path the container cannot write) and scheduler (a bad
 #: cron expression refuses to boot).
 OVERRIDABLE_SECTIONS = frozenset(
-    {"llm", "pipeline", "interest_profile", "asr", "notifications", "backfill", "content"}
+    {
+        "llm",
+        "pipeline",
+        "interest_profile",
+        "asr",
+        "tts",
+        "notifications",
+        "backfill",
+        "content",
+    }
 )
 
 #: Within `asr`, the knobs worth changing without editing a file: which model
@@ -47,6 +56,11 @@ OVERRIDABLE_SECTIONS = frozenset(
 OVERRIDABLE_ASR_KEYS = frozenset(
     {"backend", "model", "compute_type", "device", "language", "beam_size", "keep_audio"}
 )
+
+#: Within `tts`, the knobs that express a preference. `base_url` is excluded for
+#: the same reason `asr.remote_url` is — it is deployment topology, it comes from
+#: the environment, and console overrides deliberately rank below that.
+OVERRIDABLE_TTS_KEYS = frozenset({"enabled", "model", "voice", "speed", "response_format"})
 
 #: Within `backfill`, what the archive walk produces. Transcription is not here:
 #: it is a per-podcast toggle on the Podcasts page, not a global switch.
@@ -102,6 +116,13 @@ def validate_overrides(overrides: dict[str, Any]) -> None:
         raise OverrideRejected(
             f"asr keys not overridable: {', '.join(sorted(bad_asr))}. "
             "Size caps, concurrency and remote_url stay in config.yaml."
+        )
+    tts = overrides.get("tts") or {}
+    bad_tts = set(tts) - OVERRIDABLE_TTS_KEYS
+    if bad_tts:
+        raise OverrideRejected(
+            f"tts keys not overridable: {', '.join(sorted(bad_tts))}. "
+            "base_url, chunking and the timeout stay in config.yaml."
         )
 
 
