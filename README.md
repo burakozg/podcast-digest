@@ -562,8 +562,12 @@ llm:
       allow_cloud_fallback: true     # ← the data-sovereignty switch
       primary:
         provider: openrouter
-        model: qwen/qwen3-32b
+        model: qwen/qwen3.8-27b
         max_tokens: 2000
+        extra_params:                # reasoning off — see the note below
+          extra_body:
+            reasoning:
+              enabled: false
       fallbacks:
         - provider: anthropic        # a second vendor, not a second model
           model: claude-sonnet-4-6
@@ -586,6 +590,14 @@ codebase rather than the models: `temperature` is sent on every call, and the
 current Sonnet/Opus generation rejects a non-default value with a 400; and those
 models think by default, with thinking tokens counted against `max_tokens`, so a
 summary budget would be spent reasoning. Hence Haiku 4.5 and Sonnet 4.6.
+
+The second constraint applies to any hybrid thinking model, not just Anthropic's
+— which is why the Tier-1 primary above turns reasoning off explicitly. A
+truncated reply is scored as a *validation* failure, so leaving it on does not
+merely cost tokens: the tier burns both retries and falls through to the
+fallback, and you are billed twice for one summary. On OpenRouter the flag has to
+travel as `extra_body`; `reasoning_effort` is not in litellm's supported-parameter
+list for that provider and is dropped before the request is built.
 
 Costs and latency per provider/model/tier are recorded for every call:
 

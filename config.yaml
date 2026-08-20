@@ -254,10 +254,26 @@ llm:
       #   temperature: 0.2
       primary:
         provider: openrouter
-        model: qwen/qwen3-32b
+        model: qwen/qwen3.8-27b
         temperature: 0.2
         # See tier0; a summary needs more room than a triage verdict.
         max_tokens: 2000
+        # Qwen3.8 is a hybrid thinking model and every OpenRouter provider for it
+        # exposes reasoning_effort. Left on, reasoning tokens are spent against
+        # the max_tokens above, the JSON arrives truncated, instructor scores that
+        # as a *validation* failure, and the tier burns both retries before
+        # falling through to Anthropic — billed twice for one summary. Exactly the
+        # shape of the Sonnet 5 problem described just below.
+        #
+        # It has to travel as `extra_body`: `reasoning_effort` is NOT in litellm's
+        # supported-parameter list for openrouter, so spelling it that way is
+        # dropped before the request is ever built. `extra_body` is flattened into
+        # the request body verbatim, which is where OpenRouter's own unified
+        # reasoning parameter lives.
+        extra_params:
+          extra_body:
+            reasoning:
+              enabled: false
       fallbacks:
         # Sonnet 4.6 rather than Sonnet 5, for two reasons that are both about
         # this codebase rather than the models:
