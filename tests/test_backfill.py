@@ -40,6 +40,7 @@ from podcast_agent.net import UrlGuard, build_client
 from podcast_agent.state import EpisodeStatus
 from podcast_agent.summarize.tier1 import Tier1Stage
 from podcast_agent.transcripts.acquire import TranscriptAcquirer
+from podcast_agent.transcripts.asr import ASRUnavailable
 from podcast_agent.transcripts.stage import TranscriptStage
 from podcast_agent.triage.tier0 import Tier0Stage
 from podcast_agent.utils import podcast_doc_id
@@ -623,6 +624,107 @@ class TestEstimateAndConfirmation:
         # No longer a single number: whether a podcast's back catalogue is
         # transcribed is that podcast's own setting.
         assert "per podcast" in str(estimate["asr_jobs"])
+
+
+class TestASleepingTranscriberIsNotTheEpisodesFault:
+    """A dead ASR backend must defer the stage, never condemn the episodes.
+
+    `TranscriptStage.process` already gets this right: on `ASRUnavailable` it
+    puts the episode back to AWAITING_TRANSCRIPT, spends none of its retry
+    budget, and re-raises so the caller can stop. The routine pipeline honours
+    that re-raise. Backfill did not — its blanket `except Exception` marked the
+    episode ERROR, undoing the stage's work one frame up and leaving every
+    archive episode the walk touched needing a hand-written retry.
+
+    That mattered because the machine answering is a laptop that sleeps.
+    """
+
+    def _processor(self, settings, store, *, acquirer) -> BackfillProcessor:
+        llm = FakeLLM(lambda *a: Tier1Result(relevance_score=8, summary_md="x"))
+        return BackfillProcessor(
+            settings,
+            store,
+            tier0=Tier0Stage(settings, store, llm),
+            transcripts=TranscriptStage(settings, store, acquirer),
+            tier1=Tier1Stage(settings, store, llm),
+        )
+
+    def _settings(self, tmp_path: Path):
+        return archive_settings(
+            tmp_path,
+            podcasts=[
+                {
+                    "slug": "test-show",
+                    "name": "Test Show",
+                    "feed_url": FEED_URL,
+                    "backfill_mode": "full",
+                    "asr_enabled": True,
+                }
+            ],
+        )
+
+    async def test_the_episode_stays_queued_instead_of_erroring(
+        self, tmp_path: Path, store: MemoryStore
+    ) -> None:
+        calls = 0
+
+        class DeadASR:
+            async def acquire(self, episode: dict[str, Any], *, allow_asr: bool = True) -> Any:
+                nonlocal calls
+                calls += 1
+                raise ASRUnavailable("remote:http://transcriber.local:8000 unreachable")
+
+        store.seed(
+            make_episode(
+                guid="asleep",
+                status=S.AWAITING_TRANSCRIPT,
+                origin=BACKFILL_ORIGIN,
+                archive_month="2026-06",
+                backfill_mode="full",
+            )
+        )
+        settings = self._settings(tmp_path)
+        stats = await self._processor(settings, store, acquirer=DeadASR()).run()
+
+        doc = store.docs_of_type("episode")[0]
+        assert doc["status"] == S.AWAITING_TRANSCRIPT.value
+        assert doc.get("last_error") is None
+        # The whole point: no retry budget spent on an operator problem.
+        assert (doc.get("attempts") or {}).get("transcript", 0) == 0
+        assert stats.errors == 0
+        assert "transcribe" in stats.deferred
+        assert calls == 1
+
+    async def test_the_stage_stops_rather_than_walking_the_queue(
+        self, tmp_path: Path, store: MemoryStore
+    ) -> None:
+        """One dead endpoint is learned once, not once per episode."""
+        calls = 0
+
+        class DeadASR:
+            async def acquire(self, episode: dict[str, Any], *, allow_asr: bool = True) -> Any:
+                nonlocal calls
+                calls += 1
+                raise ASRUnavailable("unreachable")
+
+        for n in range(3):
+            store.seed(
+                make_episode(
+                    guid=f"asleep-{n}",
+                    status=S.AWAITING_TRANSCRIPT,
+                    origin=BACKFILL_ORIGIN,
+                    archive_month="2026-06",
+                    backfill_mode="full",
+                )
+            )
+        settings = self._settings(tmp_path)
+        stats = await self._processor(settings, store, acquirer=DeadASR()).run()
+
+        assert calls == 1
+        assert stats.errors == 0
+        assert all(
+            d["status"] == S.AWAITING_TRANSCRIPT.value for d in store.docs_of_type("episode")
+        )
 
 
 # --- helpers ------------------------------------------------------------------

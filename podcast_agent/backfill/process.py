@@ -26,6 +26,7 @@ from ..models import Route
 from ..podcasts import PodcastRegistry
 from ..state import BACKFILL_ORIGIN, EpisodeStatus
 from ..summarize.tier1 import Tier1Stage
+from ..transcripts.asr import ASRUnavailable
 from ..transcripts.stage import TranscriptStage
 from ..triage.tier0 import Tier0Stage
 
@@ -226,6 +227,25 @@ class BackfillProcessor:
                     # years-old episode that is the least trustworthy artefact
                     # this system can produce, and the archive is optional.
                     stats.no_transcript += 1
+            except ASRUnavailable as exc:
+                # Defer the whole stage, exactly as `_triage` and `_summarize` do
+                # for `LLMUnavailable` — and as the routine pipeline already does
+                # for this same exception.
+                #
+                # Without this clause the blanket handler below marked the episode
+                # ERROR, undoing one frame up the work `TranscriptStage` had just
+                # done: it puts the episode back to AWAITING_TRANSCRIPT and spends
+                # none of its retry budget precisely because a dead backend is an
+                # operator problem rather than anything about the episode. The
+                # machine that answers here is a laptop that sleeps, so the cost
+                # of getting this wrong was every archive episode the walk touched
+                # while it was shut needing to be repaired by hand.
+                #
+                # Returning rather than continuing: the next episode would reach
+                # the same dead endpoint, and one timeout is enough to learn that.
+                stats.deferred.append("transcribe")
+                log.error("backfill.transcribe_deferred", error=str(exc))
+                return
             except Exception as exc:
                 stats.errors += 1
                 log.warning("backfill.transcript_failed", episode_id=episode["_id"], error=str(exc))
