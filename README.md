@@ -43,6 +43,41 @@ RSS feeds ──► Ingestion ──► Tier-0 triage ──► route decided in
 
 ---
 
+## What's new
+
+Highlights only — [`git log`](../../commits/main) is the full history. The tag
+after each entry is what adopting it takes on a deployment already running.
+
+<!-- Maintenance rule, for whoever edits this next:
+     - User-visible functionality or operator-affecting changes only. Internal
+       refactors, test fixes and tidying get no entry.
+     - Newest first. Keep about 8; drop the oldest, but never the initial
+       release -- it is the floor of the list.
+     - Adoption tag: `restart` (config only), `rebuild` (code: ./qnap/deploy.sh),
+       and name any var that must be in the NAS `.env` BEFORE the compose file is
+       overwritten. See DEPLOY-NAS.md, "Redeploying after a code change".
+     - Full history is git log. This list never claims completeness. -->
+
+- Archive episodes stay queued instead of erroring when the transcriber is
+  asleep ([`4b1385b`](../../commit/4b1385b)) — *rebuild*
+- Summaries come from Qwen3.8 27B, with its thinking turned off so a truncated
+  reply cannot burn the tier's retry budget ([`8a92715`](../../commit/8a92715))
+  — *restart*
+- Export any episode as shareable Markdown, and have the weekly digest read
+  aloud into the vault ([`5ac431a`](../../commit/5ac431a)) — *rebuild, and
+  `TTS_URL` in the NAS `.env`*
+- Transcription can run on another machine over the OpenAI audio API, so the NAS
+  stops doing Whisper ([`738a788`](../../commit/738a788)) — *rebuild, and
+  `ASR_REMOTE_URL` in the NAS `.env`*
+- Console settings rank below environment variables rather than above everything
+  ([`f005b52`](../../commit/f005b52)) — *rebuild*
+- The dev CouchDB password is generated rather than published in the repo
+  ([`dde8521`](../../commit/dde8521)) — *fresh setup only*
+- Initial release: ingestion, two-tier triage, ASR, weekly digest, consoles
+  ([`56a8761`](../../commit/56a8761))
+
+---
+
 ## Quick start
 
 ```bash
