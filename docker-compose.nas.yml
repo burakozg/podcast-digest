@@ -5,7 +5,7 @@
 #
 #   docker compose -f docker-compose.yml -f docker-compose.nas.yml up -d
 #
-# `qnap/deploy.sh` does that for you. Everything here exists because of
+# `./deploy` does that for you. Everything here exists because of
 # something specific about this machine; see DEPLOY-NAS.md for the evidence
 # behind each one.
 #
@@ -22,7 +22,7 @@
 #    directories sidesteps it without needing sudo on the NAS. CouchDB needs no
 #    such treatment: its entrypoint starts as root and chowns its own data dir.
 #
-# 3. A LAN IP for the agent (NAS_LAN_IP in .env), on Container Station's
+# 3. A LAN IP for the agent (APP_LAN_IP in .env), on Container Station's
 #    existing qnet network. The console answers on that address directly,
 #    rather than through a port published on the NAS itself.
 #
@@ -37,7 +37,12 @@
 #    published on the NAS's loopback only — enough for the nightly backup, and
 #    invisible from the LAN.
 #
-#    Expect the NAS host to be unable to reach NAS_LAN_IP itself. That is how
+#    NAS_LAN_IP is still accepted as a second fallback: the variable was renamed
+#    to match the other three homelab projects, but the .env it is read from
+#    lives on the NAS and is git-ignored, so nothing here could rename it there.
+#    Either spelling works; drop the old one once the NAS's .env is updated.
+#
+#    Expect the NAS host to be unable to reach APP_LAN_IP itself. That is how
 #    macvlan works, not a fault: a host cannot talk to its own macvlan children.
 #    Drive the console from another machine on the LAN.
 #
@@ -100,7 +105,21 @@ services:
     networks:
       internal: {}
       qnet-static-eth1-dc7e3a:
-        ipv4_address: ${NAS_LAN_IP:-10.0.0.2}
+        ipv4_address: ${APP_LAN_IP:-${NAS_LAN_IP:-10.0.0.2}}
+        # Pinned PER NETWORK, not on the service. A service-level `mac_address:`
+        # applies to only one of an agent's interfaces — here it landed on the
+        # `internal` bridge and left qnet randomised, which is the one that
+        # matters and the one that looked fixed while it wasn't.
+        #
+        # Why pin at all: docker randomises the MAC on every `create`, and the
+        # router goes on answering for the old one. The agent comes back healthy,
+        # correctly routed, able to reach the internet — and unreachable inbound
+        # for minutes, with its healthcheck none the wiser because that probes
+        # localhost from inside.
+        #
+        # Filled in by `./deploy` from APP_LAN_IP; the value encodes the real
+        # address, so it is a placeholder here for the same reason the address is.
+        mac_address: APP_MAC_PLACEHOLDER
     deploy:
       resources:
         limits:

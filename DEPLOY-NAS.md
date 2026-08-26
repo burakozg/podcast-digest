@@ -98,16 +98,16 @@ PODAGENT_ANTHROPIC_API_KEY=
 # Digests land inside the app directory, so one backup job captures everything.
 DIGEST_DIR=./digests
 
-# Loopback only. The console's LAN address is the container's own (NAS_LAN_IP
+# Loopback only. The console's LAN address is the container's own (APP_LAN_IP
 # below); this publish exists so the NAS host itself can reach the API, which
 # it cannot reach directly, and it keeps working if the qnet address is ever
 # removed.
 AGENT_BIND=127.0.0.1:8080
 
 # docker-compose.nas.yml's static qnet IP for the agent container -- Compose
-# reads this from .env at parse time (${NAS_LAN_IP:-...} substitution), same
+# reads this from .env at parse time (${APP_LAN_IP:-...} substitution), same
 # file, no separate config. Pick a free address on your qnet subnet.
-NAS_LAN_IP=10.0.0.2
+APP_LAN_IP=10.0.0.2
 
 # Memory here is tight and shared. large-v3-turbo wants ~2GB resident plus a
 # 1.6GB first-run download; small.en is a fraction of that. Set as an env
@@ -131,6 +131,15 @@ ASR_REMOTE_URL=http://transcriber.local:8000
 # Unreachable is benign: the hourly job retries, and it only ever narrates the
 # newest digest, never the archive.
 TTS_URL=http://transcriber.local:8880
+
+# Optional: project digests into an Obsidian vault over Self-hosted LiveSync,
+# so they are readable on a phone without any folder being shared. This is the
+# CouchDB YOUR VAULT replicates against -- a different database from this app's
+# own, very likely belonging to a different application, hence its own
+# credentials. Nothing is projected until `vault.enabled: true`.
+# VAULT_COUCHDB_URL=http://couchdb.local:5984
+# VAULT_DB=yourvault
+# VAULT_COUCHDB_PASSWORD=
 EOF
 
 ssh -p $P $NAS "grep -c '^[A-Z]' $APP/.env"     # expect 12 assignments
@@ -160,20 +169,25 @@ ssh -p $P $NAS "grep -c '^[A-Z]' $APP/.env"     # expect 12 assignments
 ## Build and ship the image
 
 Copy `deploy.env.example` to `.deploy.env` (git-ignored) and fill in
-`NAS_HOST`/`NAS_SSH_PORT` for your NAS -- `qnap/deploy.sh` and
-`qnap/restore-nas.sh` auto-source it, so nothing needs exporting by hand or
-editing in the tracked script. Then:
+`NAS_SSH`/`NAS_SSH_PORT` for your NAS -- `./deploy` and `qnap/restore-nas.sh`
+auto-source it, so nothing needs exporting by hand or editing in the tracked
+script. Then:
 
 ```bash
-./qnap/deploy.sh
+./deploy
 ```
 
 Cross-builds `linux/amd64`, streams it into `docker load` over one SSH pipe (nothing
 touches disk as an intermediate on either end), verifies the image landed and reports its
-architecture, then brings the stack up with both compose files.
+architecture, ships both compose files, then brings the stack up with them.
 
-`./qnap/deploy.sh --no-up` builds and ships without restarting — use it during the
+`./deploy --no-apply` builds and ships without restarting — use it during the
 migration below, where CouchDB has to come up *before* the agent.
+
+> The variable is `NAS_SSH`, and the flag is `--no-apply`. Both were renamed
+> when the four homelab projects were aligned on one deploy contract (see
+> homelab/README.md): `NAS_HOST` meant two different things across the repos and
+> is now rejected outright, and the old `--no-up` / `--skip-run` split is gone.
 
 ---
 
@@ -437,7 +451,7 @@ pointed at `/share/Container/podcast-digest` covers everything as well.
 ## Redeploying after a code change
 
 ```bash
-./qnap/deploy.sh
+./deploy
 ```
 
 Config-only changes need no rebuild — copy `config.yaml` up and restart:

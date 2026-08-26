@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# Deploy the Podcast Digest Agent to the NAS. Run it on the Mac.
+#
+#   ./deploy            build the agent, ship it, bring the stack up
+#   ./deploy ship       build and ship only — the running containers are left alone
+#   ./deploy apply      bring the stack up from the image already on the NAS
+#   ./deploy restore    restore a CouchDB backup into the NAS (qnap/restore-nas.sh)
+#   ./deploy check      what's running, and is the console answering
+#
+# See homelab/README.md for the contract these verbs follow, and DEPLOY-NAS.md
+# for the one-time setup (.env, CouchDB credentials) this assumes exists.
+#
+# No source code reaches the NAS — only the finished image, streamed straight
+# into `docker load` over a single SSH pipe, plus the compose files.
+set -euo pipefail
+
+cd "$(dirname "$0")"
+. ./deploy.lib.sh
+nas_load_env "$PWD" "/share/Container/podcast-digest"
+
+LIFECYCLE=compose
+
+# The agent container's own address on the qnet macvlan. Compose reads it from
+# the NAS's .env (which is where docker-compose.nas.yml substitutes it); this
+# script only needs it to print a URL and to probe. Prefer .deploy.env, then
+# fall back to whichever spelling this repo's .env still uses — .env is
+# git-ignored on both machines, so nothing here could rename it for you.
+APP_LAN_IP="${APP_LAN_IP:-$(grep -hE '^(APP_LAN_IP|NAS_LAN_IP)=' .env 2>/dev/null | tail -1 | cut -d= -f2-)}"
+APP_LAN_IP="${APP_LAN_IP:-10.0.0.2}"
+
+# Must match the `image:` in docker-compose.yml, or compose will ignore what we
+# just loaded and try to pull a tag that does not exist in any registry.
+TAG="podcast-agent:1.0.0"
+
+# ── ship ──────────────────────────────────────────────────────────────────────
+do_ship() {
+  nas_require_reachable
+  nas_ship_image "$TAG" "$PWD"
+
+  # Both compose files go up with the image. They used to be assumed present,
+  # which meant a mount or a memory limit changed here had no effect on the NAS
+  # until someone remembered to copy the file across by hand.
+  echo "== shipping the compose definitions =="
+  nas_put docker-compose.yml "${NAS_APP_DIR}/docker-compose.yml"
+  # config.yaml for the same reason, and it had the same bug: it was assumed
+  # present, so every non-secret setting changed here -- a new section, a
+  # threshold, a feature flag -- had no effect on the NAS until someone
+  # remembered to copy it across. Secrets and deployment topology stay in .env
+  # and env overrides, which rank above this file, so shipping it cannot
+  # overwrite them.
+  nas_put config.yaml "${NAS_APP_DIR}/config.yaml"
+  # The .nas file carries a MAC placeholder rather than a tracked address — see
+  # its header and nas_mac_for_ip. Rendered here, shipped from deploy-out/.
+  nas_render docker-compose.nas.yml deploy-out/docker-compose.nas.yml \
+    "s#APP_MAC_PLACEHOLDER#$(nas_mac_for_ip "${APP_LAN_IP}")#"
+  nas_put deploy-out/docker-compose.nas.yml "${NAS_APP_DIR}/docker-compose.nas.yml"
+}
+
+# ── apply ─────────────────────────────────────────────────────────────────────
+do_apply() {
+  nas_require_reachable
+  # Both files, in this order: the base is the portable deployment, the .nas one
+  # carries everything specific to this machine. See docker-compose.nas.yml.
+  #
+  # --force-recreate, and it is load-bearing. config.yaml is bind-mounted as a
+  # *file*, and nas_put replaces it by rename — a new inode, which a running
+  # container never sees however many times it is restarted. Compose would not
+  # recreate on its own either: nothing in the compose definition changed, only
+  # the bytes behind a path. So a deploy that shipped a new config would report
+  # success while the agent went on reading the old one. The settings are read
+  # at startup regardless, so recreating is what "applied" means here.
+  #
+  # Passed through nas_ssh rather than nas_compose_up because that helper is the
+  # vendored shared library (see homelab/deploy.lib.sh) and takes no such flag.
+  # The same gap applies to any project there that ships a config file.
+  nas_ssh "mkdir -p ${NAS_DOCKER_CONFIG} && cd '${NAS_APP_DIR}' && ${NAS_DOCKER_ENV} '${NAS_DOCKER_BIN}' compose -f docker-compose.yml -f docker-compose.nas.yml up -d --force-recreate" \
+    || die "compose up failed on the NAS."
+  nas_ssh "cd '${NAS_APP_DIR}' && ${NAS_DOCKER_ENV} '${NAS_DOCKER_BIN}' compose -f docker-compose.yml -f docker-compose.nas.yml ps --format 'table {{.Name}}\t{{.Status}}'"
+  echo
+  # "Up (healthy)" is checked from inside the container; this is checked from
+  # here, over the network a user actually arrives on. See nas_wait_reachable.
+  nas_wait_reachable "Agent" "http://${APP_LAN_IP}:8080" "/admin" \
+    || die "Deployed, but the console is not reachable over the LAN — see above."
+  echo
+  echo "done. Console: http://${APP_LAN_IP}:8080/admin"
+  echo "Logs:  ssh -p $NAS_SSH_PORT $NAS_SSH \"cd '$NAS_APP_DIR' && '$NAS_DOCKER_BIN' compose logs -f podcast-agent\""
+  echo
+  echo "Note: the NAS host itself cannot reach ${APP_LAN_IP} (macvlan); check the"
+  echo "console from another machine on the LAN."
+}
+
+# ── restore ───────────────────────────────────────────────────────────────────
+# Its own script: the restore splits work across both machines (python3 here,
+# curl there, streamed between) and is far too specific to inline. Dispatched
+# from here so there is still one entry point per repo.
+#
+# The nightly backup is deliberately NOT a verb: qnap/backup-nas.sh runs ON the
+# NAS from its cron, in POSIX sh, because that host has no python3. It is not a
+# thing this Mac invokes.
+do_restore() { exec ./qnap/restore-nas.sh "$@"; }
+
+# ── check ─────────────────────────────────────────────────────────────────────
+do_check() {
+  nas_require_reachable
+  echo "══ containers ════════════════════════════════════════════════"
+  nas_ssh "cd '${NAS_APP_DIR}' && '${NAS_DOCKER_BIN}' compose -f docker-compose.yml -f docker-compose.nas.yml ps --format 'table {{.Name}}\t{{.Status}}'"
+  echo
+  echo "══ console ═══════════════════════════════════════════════════"
+  nas_probe "Agent" "http://${APP_LAN_IP}:8080" "/admin" || {
+    echo "  ↳ Expected if you're off the LAN/VPN. The NAS host cannot reach its own"
+    echo "    macvlan children either — probe from another machine, not over ssh."
+  }
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: ./deploy [verb] [--no-apply]
+
+  (none)    ship, then bring the stack up — the everyday command
+  ship      build the agent image and ship it with the compose files; containers untouched
+  apply     bring the stack up from what is already on the NAS
+  restore   restore a CouchDB backup into the NAS (qnap/restore-nas.sh <backup.json.gz>)
+  check     what is running on the NAS, and is the console answering
+
+  --no-apply   stop after ship (with no verb, or with `up`)
+
+Real values live in the git-ignored .deploy.env — see deploy.env.example.
+USAGE
+  exit 1
+}
+
+VERB=""
+ARGS=()
+while [ $# -gt 0 ]; do
+  if nas_global_flag "$1"; then :
+  elif [ -z "$VERB" ]; then VERB="$1"
+  else ARGS+=("$1")
+  fi
+  shift
+done
+
+case "${VERB:-up}" in
+  ship)    do_ship ;;
+  apply)   do_apply ;;
+  up)      do_ship
+           if $NO_APPLY; then echo; echo "--no-apply: stack not restarted."; else do_apply; fi ;;
+  restore) do_restore ${ARGS[@]+"${ARGS[@]}"} ;;
+  check)   do_check ;;
+  help|-h|--help) usage ;;
+  *) echo "✗ Unknown verb: ${VERB}" >&2; usage ;;
+esac

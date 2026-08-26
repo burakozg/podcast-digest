@@ -24,7 +24,7 @@
 # sitting in the app directory.
 #
 # Usage:
-#   ./qnap/restore-nas.sh backups/podcast_agent-<stamp>.json.gz [target-db]
+#   ./deploy restore backups/podcast_agent-<stamp>.json.gz [target-db]
 
 set -euo pipefail
 
@@ -32,18 +32,18 @@ BACKUP="${1:?usage: restore-nas.sh <backup.json.gz> [target-db]}"
 TARGET_DB="${2:-podcast_agent}"
 
 # Real per-deployment values live in .deploy.env, git-ignored (see
-# deploy.env.example) — auto-sourced here so nothing needs exporting by hand.
+# deploy.env.example) — loaded by the shared library, along with the ssh helper
+# below, so this script and ./deploy can never disagree about where the NAS is.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-[ -f "${REPO_ROOT}/.deploy.env" ] && . "${REPO_ROOT}/.deploy.env"
+# shellcheck source=../deploy.lib.sh
+. "${REPO_ROOT}/deploy.lib.sh"
+nas_load_env "${REPO_ROOT}" "/share/Container/podcast-digest"
 
-NAS_HOST="${NAS_HOST:-deploy@nas.local}"
-NAS_SSH_PORT="${NAS_SSH_PORT:-22}"
-NAS_APP_DIR="${NAS_APP_DIR:-/share/Container/podcast-digest}"
 NAS_COUCHDB="${NAS_COUCHDB:-http://127.0.0.1:5984}"
 
 [[ -f "$BACKUP" ]] || { echo "FATAL: no such backup: $BACKUP" >&2; exit 2; }
 
-ssh_nas() { ssh -p "$NAS_SSH_PORT" "$NAS_HOST" "$@"; }
+ssh_nas() { nas_ssh "$@"; }
 
 # Everything the NAS side needs to find its own credentials, in one place.
 REMOTE_PREAMBLE="PW=\$(grep -E '^COUCHDB_PASSWORD=' '$NAS_APP_DIR/.env' | cut -d= -f2-);
