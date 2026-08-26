@@ -30,8 +30,10 @@ from .backfill.process import BackfillProcessor
 from .config import Settings, load_settings
 from .db import CouchStore, Store, StoreError
 from .digest.archive import ArchiveDigestGenerator
+from .digest.episode_notes import write_episode_notes
 from .digest.generate import DigestGenerator
 from .digest.narrate import DigestNarrator
+from .entities import aggregate, digest_weeks, rank, write_entity_notes
 from .ingest.feeds import Ingestor
 from .joblock import reclaim_local_leases
 from .llm import build_llm_client
@@ -53,6 +55,7 @@ from .transcripts.asr import build_asr_backend
 from .transcripts.stage import TranscriptStage
 from .triage.tier0 import Tier0Stage
 from .utils import iso_now
+from .vault import VaultUnavailable, build_vault, sync_all
 
 log = get_logger(__name__)
 
@@ -188,6 +191,20 @@ def build_app(settings: Settings, *, store: Store | None = None, llm: Any = None
         app.state.asr_backend = asr_backend
         speech_backend = build_speech_backend(active_settings.tts)
         app.state.speech_backend = speech_backend
+        # None when off, so every call site is a no-op rather than a branch.
+        vault = (
+            build_vault(
+                active_settings.vault,
+                active_settings.vault_couchdb_password.get_secret_value()
+                if active_settings.vault_couchdb_password
+                else None,
+            )
+            if active_settings.vault.enabled
+            else None
+        )
+        app.state.vault = vault
+        if vault is not None:
+            log.info("app.vault_enabled", target=vault.name, folder=active_settings.vault.folder)
 
         # Output directories are created eagerly so a permissions problem shows
         # up at boot rather than at 06:00 on a Friday.
@@ -228,7 +245,7 @@ def build_app(settings: Settings, *, store: Store | None = None, llm: Any = None
             # The LLM is what makes the digest's opening section possible
             # (roadmap D1). Passing it does not make digest generation depend on
             # a model: the section is skipped when one is unavailable.
-            digest=DigestGenerator(active_settings, active_store, active_llm),
+            digest=DigestGenerator(active_settings, active_store, active_llm, vault),
             registry=registry,
             # Archive backfill reuses the same stages; the differences are in
             # its own config (no ASR, stricter threshold) and its own output.
@@ -255,7 +272,44 @@ def build_app(settings: Settings, *, store: Store | None = None, llm: Any = None
         async def export_signals() -> dict[str, Any]:
             """Weekly, half an hour after the digest: a period's reader marks
             written into the vault where anything else can read them."""
-            return await export_new_marks(active_store, active_settings)
+            return await export_new_marks(active_store, active_settings, vault)
+
+        async def rebuild_entity_notes() -> dict[str, Any]:
+            """Weekly: one note per entity worth a page of its own, then into
+            the vault. This is what the digests' `[[wikilinks]]` resolve to."""
+            weeks = await digest_weeks(active_store)
+            # Episode notes first: a topic note can only link a note that
+            # already exists, and `note_of` is what carries the mapping.
+            note_of = (
+                await write_episode_notes(active_store, active_settings, week_of=weeks)
+                if active_settings.output.episode_notes
+                else {}
+            )
+            found = await aggregate(active_store)
+            ranked = rank(found, min_mentions=active_settings.pipeline.entity_note_min_mentions)
+            paths = await write_entity_notes(
+                active_store, active_settings, ranked, week_of=weeks, note_of=note_of
+            )
+            # Everything, not just the notes just written: a digest is projected
+            # on the Friday it is generated, against whatever topics existed
+            # then, and is never rewritten. Re-running the whole set is what lets
+            # an entity that only now earned a note become a link in the digests
+            # that mention it. Unchanged files are skipped on a content check.
+            if vault is not None:
+                try:
+                    await sync_all(vault, active_settings.output.digest_dir, episode_notes=note_of)
+                except VaultUnavailable as exc:
+                    # The notes are written and correct on disk; a vault that is
+                    # down is an operator problem, not a reason to fail the job.
+                    # `POST /api/v1/vault/sync` catches up when it is back.
+                    log.error("entities.projection_deferred", error=str(exc))
+            log.info(
+                "entities.rebuilt",
+                notes=len(paths),
+                episode_notes=len(note_of),
+                min_mentions=active_settings.pipeline.entity_note_min_mentions,
+            )
+            return {"written": len(paths), "episode_notes": len(note_of)}
 
         async def narrate_newest() -> dict[str, Any]:
             """Hourly: read the newest digest aloud if it has no audio yet.
@@ -272,6 +326,10 @@ def build_app(settings: Settings, *, store: Store | None = None, llm: Any = None
             retention,
             app.state.search,
             signals=export_signals,
+            # Only when something reads them: the notes exist to be linked from
+            # the vault, and rebuilding 137 files nothing points at is work for
+            # its own sake.
+            entities=rebuild_entity_notes if active_settings.vault.enabled else None,
             # Not registered at all when text-to-speech is off, so a disabled
             # feature costs no wakeups.
             narrate=narrate_newest if active_settings.tts.enabled else None,
@@ -330,6 +388,8 @@ def build_app(settings: Settings, *, store: Store | None = None, llm: Any = None
             await http_client.aclose()
             await asr_backend.close()
             await speech_backend.close()
+            if vault is not None:
+                await vault.close()
             closer = getattr(active_llm, "close", None)
             if closer is not None:
                 await closer()

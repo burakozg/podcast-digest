@@ -14,7 +14,9 @@ from pathlib import Path
 from .backfill import BACKFILL_ORIGIN, ROUTINE_ORIGIN
 from .db import Store
 from .digest.read import split_frontmatter
+from .entities import TOPIC_NAMES_DOC_ID, canonical, pin_note_names
 from .logging_setup import get_logger
+from .notes import ENTITIES_DIR
 from .utils import parse_iso
 
 log = get_logger(__name__)
@@ -188,6 +190,50 @@ def _next_month(key: str) -> str:
     return f"{year + 1:04d}-01" if month == 12 else f"{year:04d}-{month + 1:02d}"
 
 
+async def seed_topic_note_names(store: Store, digest_dir: Path) -> dict[str, int]:
+    """Pin the filename of every topic note that already exists.
+
+    :func:`~.entities.resolve_note_names` pins a name the first time it writes a
+    note, which covers everything above the note threshold on the next run. It
+    does not cover a note that exists on disk but whose entity has since dropped
+    *below* the threshold: nothing writes it, so nothing pins it, and if that
+    entity climbs back later it would be named afresh — beside the old file,
+    which still holds the other writers' sections.
+
+    So the existing directory is read once and taken as the record. The key is
+    recovered from each note's own `title:`, through the same `canonical` the
+    aggregation uses, so a note pins to the entity it actually describes.
+    """
+    directory = digest_dir / ENTITIES_DIR
+    if not directory.is_dir():
+        return {"examined": 0, "pinned": 0}
+
+    found: dict[str, str] = {}
+    examined = 0
+    for path in sorted(directory.glob("*.md")):
+        examined += 1
+        try:
+            front, _ = split_frontmatter(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        title = str(front.get("title") or "").strip()
+        if not title:
+            continue
+        # setdefault: if two files somehow claim one entity, the first by name
+        # wins and the other is left alone rather than silently retargeted.
+        found.setdefault(canonical(title), path.stem)
+
+    if not found:
+        return {"examined": examined, "pinned": 0}
+
+    before = len((await store.get(TOPIC_NAMES_DOC_ID) or {}).get("names") or {})
+    after = len(await pin_note_names(store, found))
+    pinned = after - before
+    if pinned:
+        log.info("migrate.topic_names_seeded", examined=examined, pinned=pinned)
+    return {"examined": examined, "pinned": pinned}
+
+
 async def run_all(
     store: Store, digest_dir: Path | None = None, backfill_months: int = 12
 ) -> dict[str, dict[str, int]]:
@@ -196,4 +242,7 @@ async def run_all(
     result["backfill_anchors"] = await anchor_backfill_walks(store, backfill_months)
     if digest_dir is not None:
         result["digest_files"] = await adopt_orphaned_digest_files(store, digest_dir)
+        # Before anything writes a topic note: a name pinned from what is
+        # already in the vault is a name nothing has to rename.
+        result["topic_names"] = await seed_topic_note_names(store, digest_dir)
     return result

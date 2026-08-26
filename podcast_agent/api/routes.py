@@ -26,6 +26,7 @@ from ..content import render as render_seeds
 from ..content import select as select_seed_episodes
 from ..content import write as write_seeds
 from ..db import TRANSCRIPT_ATTACHMENT, Doc, Selector, Store, typed_sort
+from ..digest.episode_notes import pinned_episode_names, write_episode_notes
 from ..digest.export import episode_markdown, export_filename
 from ..digest.narrate import NothingToNarrate
 from ..digest.read import DigestUnreadable, digest_period_key, digest_runs, read_digest
@@ -60,6 +61,7 @@ from ..state import (
     retry_target,
 )
 from ..utils import digest_doc_id, iso, iso_now, podcast_doc_id, utcnow
+from ..vault import LiveSyncVault, VaultUnavailable, sync_all
 from .auth import require_api_key
 
 log = get_logger(__name__)
@@ -110,6 +112,11 @@ def _registry(request: Request) -> PodcastRegistry:
 
 def _runner(request: Request) -> PipelineRunner:
     return request.app.state.runner  # type: ignore[no-any-return]
+
+
+def _vault(request: Request) -> LiveSyncVault | None:
+    # getattr, not attribute access: tests build the app without a lifespan.
+    return getattr(request.app.state, "vault", None)
 
 
 def _search(request: Request) -> SearchIndex:
@@ -1071,8 +1078,64 @@ async def export_signals(request: Request) -> dict[str, Any]:
     so calling it twice does not repeat a mark — the second call finds nothing
     new and writes nothing.
     """
-    result: dict[str, Any] = await export_new_marks(_store(request), _settings(request))
+    result: dict[str, Any] = await export_new_marks(
+        _store(request), _settings(request), _vault(request)
+    )
     return result
+
+
+@api_router.post("/vault/sync", summary="Project digests into the Obsidian vault")
+async def sync_vault(
+    request: Request,
+    # The default covers the whole corpus rather than a page of it: below the
+    # number of files there are, a "catch-up pass" silently catches up on part
+    # of the corpus, and the notes left at an abandoned path are not cleared at
+    # all — a truncated pass is not allowed to say what no longer exists.
+    limit: int = Query(default=5000, ge=1, le=20000),
+) -> dict[str, Any]:
+    """Catch-up pass: project every digest, signals file, episode and topic note.
+
+    Routine writes project themselves, so this is for the first run after
+    switching the vault on, and for whatever a spell of downtime missed. It is
+    idempotent — a file already in the vault byte for byte is skipped, and one
+    deleted in Obsidian stays deleted rather than being resurrected.
+    """
+    settings = _settings(request)
+    vault = _vault(request)
+    if vault is None:
+        raise HTTPException(
+            status_code=409,
+            detail="vault.enabled is false — nothing is configured to sync to.",
+        )
+
+    try:
+        # Read the pinned names rather than re-deriving them: a catch-up run
+        # must slim a digest correctly whether or not the note-writing job has
+        # run since.
+        result = await sync_all(
+            vault,
+            settings.output.digest_dir,
+            episode_notes=await pinned_episode_names(_store(request)),
+            limit=limit,
+        )
+    except VaultUnavailable as exc:
+        # Partial progress is real progress: what landed, landed. The message
+        # carries where it stopped.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    log.info(
+        "vault.sync",
+        projected=len(result["projected"]),
+        skipped=result["skipped"],
+        retired=len(result["retired"]),
+        folder=settings.vault.folder,
+    )
+    return {
+        **result,
+        "folder": settings.vault.folder,
+        "episodes_folder": settings.vault.episodes_folder,
+        "entities_folder": settings.vault.entities_folder,
+    }
 
 
 @api_router.get("/insights/precision", summary="Is the interest profile still right?")
@@ -1125,19 +1188,62 @@ async def get_entity(
 async def write_entities(
     request: Request,
     days: int = Query(default=0, ge=0, le=3650),
-    min_mentions: int = Query(default=DEFAULT_MIN_MENTIONS, ge=1, le=100),
+    min_mentions: int | None = Query(
+        default=None,
+        ge=1,
+        le=100,
+        description="Defaults to pipeline.entity_note_min_mentions.",
+    ),
 ) -> dict[str, Any]:
-    """Rewrites `entities/` in the digest directory.
+    """Rewrites `entities/` in the digest directory, then projects the vault.
 
     Wholesale rather than incrementally: a note is a view of the corpus, and a
     stale line in one is worse than a rebuilt file because the reader cannot
     tell which lines are current.
+
+    ``min_mentions`` falls back to the configured value rather than to
+    `entities.DEFAULT_MIN_MENTIONS`, so calling this by hand produces the same
+    vault the Friday job does. The two disagreeing is how you end up with 1,269
+    notes you did not ask for.
     """
     store = _store(request)
+    settings = _settings(request)
+    threshold = (
+        min_mentions if min_mentions is not None else settings.pipeline.entity_note_min_mentions
+    )
+    weeks = await digest_weeks(store)
+    # Episode notes first — a topic note can only link one that already exists.
+    note_of = (
+        await write_episode_notes(store, settings, week_of=weeks)
+        if settings.output.episode_notes
+        else {}
+    )
     found = await aggregate(store, since=window_start(days))
-    ranked = rank(found, min_mentions=min_mentions)
-    paths = write_entity_notes(_settings(request), ranked, week_of=await digest_weeks(store))
-    return {"written": len(paths), "paths": paths[:50]}
+    ranked = rank(found, min_mentions=threshold)
+    paths = await write_entity_notes(store, settings, ranked, week_of=weeks, note_of=note_of)
+
+    # Re-projecting everything, not just the new notes: a digest is projected on
+    # the Friday it is written and never rewritten, so this is what lets an
+    # entity that only now earned a note become a link in the digests that
+    # already mention it.
+    vault = _vault(request)
+    projected = 0
+    if vault is not None:
+        try:
+            projected = len(
+                (await sync_all(vault, settings.output.digest_dir, episode_notes=note_of))[
+                    "projected"
+                ]
+            )
+        except VaultUnavailable as exc:
+            log.error("entities.projection_deferred", error=str(exc))
+    return {
+        "written": len(paths),
+        "episode_notes": len(note_of),
+        "min_mentions": threshold,
+        "projected": projected,
+        "paths": paths[:50],
+    }
 
 
 @api_router.get("/search", summary="Full-text search over summaries and transcripts")

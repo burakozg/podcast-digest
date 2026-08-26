@@ -158,6 +158,12 @@ class SchedulerConfig(StrictModel):
     #: week to retry. The job is idempotent — it returns after one document read
     #: when the audio is already there — so an idle hour costs nothing.
     narrate_cron: str = "20 * * * *"
+    #: Rebuilding the entity notes the digests link to. Fifteen minutes after
+    #: the signals export, so the whole Friday sequence is digest -> signals ->
+    #: topics, each reading what the one before it wrote. Weekly rather than
+    #: hourly because it is a full re-aggregation of the corpus and the answer
+    #: only changes when new episodes are summarised.
+    entities_cron: str = "45 6 * * fri"
     #: Kick ingest+pipeline once at boot (useful for a fresh deployment).
     run_on_startup: bool = False
 
@@ -214,6 +220,16 @@ class PipelineConfig(StrictModel):
     #: single episode, whatever the week held. Off leaves the digest exactly as
     #: it was; a failure at run time does the same, silently.
     weekly_synthesis: bool = True
+    #: Mentions before an entity earns a note of its own.
+    #:
+    #: Far above `entities.DEFAULT_MIN_MENTIONS`, which answers a different
+    #: question — that one is the floor for *reporting* an entity, this is the
+    #: floor for writing a file into somebody's vault. Measured on this corpus:
+    #: 2 gives 1,269 notes, 5 gives 297, 8 gives 137, 12 gives 81. A personal
+    #: vault of a couple of hundred notes is drowned by the first and informed
+    #: by the third, so the default errs high. Raise it if the graph gets noisy;
+    #: nothing is lost, because the entity is still in the digest as plain text.
+    entity_note_min_mentions: int = Field(default=8, ge=1, le=100)
     max_retries: int = Field(default=3, ge=0, le=10)
     description_max_chars: int = Field(default=2000, ge=200, le=50_000)
     max_input_tokens: int = Field(default=24_000, ge=1000)
@@ -389,6 +405,82 @@ class TTSConfig(StrictModel):
     def _enabled_needs_url(self) -> TTSConfig:
         if self.enabled and not self.base_url:
             raise ValueError("tts.base_url is required when tts.enabled is true")
+        return self
+
+
+class VaultConfig(StrictModel):
+    """Projecting written Markdown into an Obsidian vault over LiveSync.
+
+    Files already land on disk; this is the last hop that makes them readable on
+    a phone. The mechanism is Self-hosted LiveSync's own document format written
+    straight into the CouchDB the vault replicates against — so nothing has to
+    copy files, and no machine has to be awake but the NAS.
+
+    Deployment topology, therefore not console-overridable — the same rule that
+    keeps `asr.remote_url` and `tts.base_url` out of `settings_store`. Which
+    database receives your notes is not a setting to fat-finger in a browser.
+
+    Two client-side settings this depends on, both currently off and both of
+    which silently break the projection if turned on: LiveSync's end-to-end
+    encryption (`encrypt`), because we write plaintext chunks, and path
+    obfuscation (`usePathObfuscation`), because entries are keyed by path.
+    """
+
+    enabled: bool = False
+    #: The CouchDB the *vault* replicates against, which is not this app's own
+    #: database. Placeholder by default: the real address is deployment detail
+    #: and belongs in the environment.
+    couchdb_url: str | None = None
+    db: str = Field(default="vault", pattern=r"^[a-z][a-z0-9_$()+/-]*$")
+    user: str = "podagent"
+    #: Where digests and the weekly signals file land. A subfolder of the
+    #: application's own root folder rather than the root itself, so
+    #: ``11 podcasts`` can be opened as one thing while still separating what is
+    #: read once a week from the several hundred episode notes beside it.
+    folder: str = "11 podcasts/digests"
+    #: Entity notes go somewhere else, because they are a different kind of
+    #: thing: not a source you read once but a topic page that accumulates, and
+    #: the destination every digest's `[[wikilinks]]` point at. Keeping them out
+    #: of the raw-capture folder is what lets the graph read as topics rather
+    #: than as more podcast output.
+    entities_folder: str = "99 topics"
+    #: Per-episode notes: what a topic note's lines link to, mirroring how the
+    #: other applications writing to this vault give each story or clipping a
+    #: note of its own. Grouped one level deeper, per show — see
+    #: :func:`~..digest.episode_notes.show_folder`.
+    episodes_folder: str = "11 podcasts/episodes"
+    #: One PUT of a file that is at most a few hundred KB; a slow answer here
+    #: means the NAS or the network is unwell, not that the work is large.
+    timeout_s: int = Field(default=30, ge=5, le=300)
+
+    @field_validator("couchdb_url")
+    @classmethod
+    def _check_url(cls, value: str | None) -> str | None:
+        # Empty means unset, not malformed. Compose substitutes `${VAULT_COUCHDB_URL:-}`
+        # to an empty string when the var is absent, so rejecting "" here would
+        # refuse to boot on every deployment that has not opted in — a feature
+        # nobody enabled taking the whole service down with it.
+        if value is None or not value.strip():
+            return None
+        return _require_http_url(value)
+
+    @field_validator("folder", "entities_folder", "episodes_folder")
+    @classmethod
+    def _clean_folder(cls, value: str) -> str:
+        cleaned = value.strip("/")
+        if not cleaned:
+            raise ValueError("a vault folder cannot be empty or '/'")
+        # Nesting is allowed — `11 podcasts/digests` is the default — but an
+        # empty segment would produce `a//b`, which is a different vault path
+        # from `a/b` and would file the note somewhere nobody is looking.
+        if any(not segment.strip() for segment in cleaned.split("/")):
+            raise ValueError(f"a vault folder cannot contain an empty segment: {value!r}")
+        return cleaned
+
+    @model_validator(mode="after")
+    def _enabled_needs_url(self) -> VaultConfig:
+        if self.enabled and not self.couchdb_url:
+            raise ValueError("vault.couchdb_url is required when vault.enabled is true")
         return self
 
 
@@ -587,6 +679,7 @@ class Settings(BaseSettings):
     llm: LLMConfig
     asr: ASRConfig = Field(default_factory=ASRConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)
+    vault: VaultConfig = Field(default_factory=VaultConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     couchdb: CouchDBConfig = Field(default_factory=CouchDBConfig)
     api: APIConfig = Field(default_factory=APIConfig)
@@ -600,6 +693,9 @@ class Settings(BaseSettings):
     admin_api_key: SecretStr | None = None
     ntfy_token: SecretStr | None = None
     couchdb_password: SecretStr | None = None
+    #: Credentials for the *vault's* CouchDB (see VaultConfig) — a different
+    #: database, owned by a different application, so a different secret.
+    vault_couchdb_password: SecretStr | None = None
     openrouter_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
 

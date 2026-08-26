@@ -34,6 +34,7 @@ from ..sanitize import (
 )
 from ..state import AUDIT_ONLY_STATUSES, DIGESTABLE_STATUSES, EpisodeStatus
 from ..utils import digest_doc_id, format_duration, iso, iso_now, parse_iso, utcnow
+from ..vault import LiveSyncVault
 from .synthesis import WeeklySynthesizer, as_view, previous_theme_titles
 
 log = get_logger(__name__)
@@ -196,10 +197,19 @@ def summary_view(settings: Settings, episode: Doc, basis_labels: dict[str, str])
 
 
 class DigestGenerator:
-    def __init__(self, settings: Settings, store: Store, llm: StructuredLLM | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        store: Store,
+        llm: StructuredLLM | None = None,
+        vault: LiveSyncVault | None = None,
+    ) -> None:
         self._settings = settings
         self._store = store
         self._env = _build_env()
+        # Optional for the same reason the LLM is: a digest is a database read
+        # and a render, and it stays one when nothing is syncing it anywhere.
+        self._vault = vault
         # Optional on purpose: the digest is a database read and a render, and
         # it stays that way when no model is wired in. Every caller that has one
         # gets the opening section; the tests that do not, do not.
@@ -268,10 +278,18 @@ class DigestGenerator:
             f"podcast-digest-{period_key}.md"
         )
         written = _atomic_write(self._settings.output.digest_dir, relative, rendered)
+        # Deliberately NOT projected here. Each entry's summary is replaced in
+        # the vault by a link to that episode's own note, and those notes are
+        # written by the job that runs afterwards — projecting now would publish
+        # a digest 45 minutes before the things it points at exist. The same job
+        # projects it, so the vault only ever sees the finished article; the
+        # console and the file on disk are current from this moment either way.
 
+        # Episode notes are written corpus-wide by digest.episode_notes, not
+        # here: the archive is most of the corpus and never passes through a
+        # weekly digest, so a per-digest writer could only cover the recent
+        # slice — and two writers for the same episodes drift apart.
         note_paths: list[str] = []
-        if self._settings.output.episode_notes:
-            note_paths = self._write_episode_notes(buckets, period_key)
 
         relative_path = str(written.relative_to(self._settings.output.digest_dir))
         run = {
@@ -519,24 +537,6 @@ class DigestGenerator:
             ),
             **buckets,
         }
-
-    # --- episode notes ------------------------------------------------------
-
-    def _write_episode_notes(
-        self, buckets: dict[str, list[dict[str, Any]]], period_key: str
-    ) -> list[str]:
-        template = self._env.get_template("episode.md.j2")
-        written: list[str] = []
-        for view in [*buckets["top_picks"], *buckets["also_relevant"]]:
-            relative = (
-                Path("episodes")
-                / slugify(view["podcast_slug"])
-                / f"{view['published_date']}-{slugify(view['title'])}.md"
-            )
-            rendered = template.render(e=view, week=period_key)
-            path = _atomic_write(self._settings.output.digest_dir, relative, rendered)
-            written.append(str(path.relative_to(self._settings.output.digest_dir)))
-        return written
 
     # --- publishing / reconciliation ----------------------------------------
 

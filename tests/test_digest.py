@@ -385,21 +385,25 @@ class TestReconciliation:
 
 
 class TestEpisodeNotes:
-    async def test_disabled_by_default(self, settings, store: MemoryStore) -> None:
+    """Digest generation no longer writes them — `digest.episode_notes` does,
+    corpus-wide, because the archive never passes through a weekly digest. See
+    tests/test_episode_notes.py."""
+
+    async def test_generating_a_digest_writes_no_episode_notes(
+        self, settings, store: MemoryStore
+    ) -> None:
         seed_corpus(store)
         await run(settings, store)
         assert not (settings.output.digest_dir / "episodes").exists()
 
-    async def test_enabled_writes_linked_notes(self, tmp_path: Path, store: MemoryStore) -> None:
+    async def test_not_even_when_the_flag_is_on(self, tmp_path: Path, store: MemoryStore) -> None:
+        # The flag now gates the corpus-wide writer, not this path. Two writers
+        # producing notes for the same episodes in different layouts is how they
+        # drift apart.
         settings = make_settings(tmp_path, output={"episode_notes": True})
         seed_corpus(store)
         await run(settings, store)
-        notes = list((settings.output.digest_dir / "episodes").rglob("*.md"))
-        assert len(notes) == 2  # top picks + also relevant
-        content = notes[0].read_text()
-        assert content.startswith("---\n")
-        assert "type: podcast-episode" in content
-        assert "[[podcast-digest-2026-W31]]" in content
+        assert not (settings.output.digest_dir / "episodes").exists()
 
 
 class TestPeriodKeys:

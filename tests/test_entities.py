@@ -20,6 +20,8 @@ from helpers import FakeLLM, make_episode, make_settings
 
 from podcast_agent.db import MemoryStore
 from podcast_agent.entities import (
+    TOPIC_NAMES_DOC_ID,
+    Entity,
     aggregate,
     canonical,
     display_name,
@@ -28,6 +30,7 @@ from podcast_agent.entities import (
     write_entity_notes,
 )
 from podcast_agent.main import build_app
+from podcast_agent.migrate import seed_topic_note_names
 from podcast_agent.state import EpisodeStatus
 
 S = EpisodeStatus
@@ -193,12 +196,17 @@ class TestObsidianNotes:
         settings = make_settings(tmp_path)
         store.seed(episode("a", ["Volt Typhoon"]), episode("b", ["Volt Typhoon"]))
         ranked = rank(await aggregate(store))
-        written = write_entity_notes(settings, ranked)
+        written = await write_entity_notes(store, settings, ranked)
 
         assert written == ["entities/volt-typhoon.md"]
         text = (settings.output.digest_dir / written[0]).read_text()
         assert "# Volt Typhoon" in text
-        assert "type: podcast-entity" in text
+        # The note is shared property now: this writer owns one marked region
+        # and its own prefixed keys, nothing else. See podcast_agent/notes.py.
+        assert "type: topic" in text
+        assert "podcasts_mentions: 2" in text
+        assert "## From podcasts" in text
+        assert text.count("<!-- begin:podcast-digest -->") == 1
         assert "2 episodes across 1 show" in text
 
     async def test_the_note_links_the_week_an_episode_appeared_in(
@@ -210,7 +218,9 @@ class TestObsidianNotes:
         doc["digest_id"] = "digest:2026-W31"
         store.seed(doc, episode("b", ["Volt Typhoon"]))
         ranked = rank(await aggregate(store))
-        written = write_entity_notes(settings, ranked, week_of={"digest:2026-W31": "2026-W31"})
+        written = await write_entity_notes(
+            store, settings, ranked, week_of={"digest:2026-W31": "2026-W31"}
+        )
         assert (
             "[[podcast-digest-2026-W31]]" in (settings.output.digest_dir / written[0]).read_text()
         )
@@ -222,8 +232,8 @@ class TestObsidianNotes:
         settings = make_settings(tmp_path)
         store.seed(episode("a", ["Volt Typhoon"]), episode("b", ["Volt Typhoon"]))
         ranked = rank(await aggregate(store))
-        write_entity_notes(settings, ranked)
-        write_entity_notes(settings, ranked)
+        await write_entity_notes(store, settings, ranked)
+        await write_entity_notes(store, settings, ranked)
         text = (settings.output.digest_dir / "entities/volt-typhoon.md").read_text()
         assert text.count("# Volt Typhoon") == 1
 
@@ -233,7 +243,7 @@ class TestObsidianNotes:
         """They are output the vault syncs, not derived scratch."""
         settings = make_settings(tmp_path)
         store.seed(episode("a", ["Volt Typhoon"]), episode("b", ["Volt Typhoon"]))
-        write_entity_notes(settings, rank(await aggregate(store)))
+        await write_entity_notes(store, settings, rank(await aggregate(store)))
         assert (settings.output.digest_dir / "entities").is_dir()
 
     async def test_a_hostile_entity_name_cannot_escape_its_line(
@@ -243,7 +253,7 @@ class TestObsidianNotes:
         settings = make_settings(tmp_path)
         nasty = "Evil](http://x) [click"
         store.seed(episode("a", [nasty]), episode("b", [nasty]))
-        written = write_entity_notes(settings, rank(await aggregate(store)))
+        written = await write_entity_notes(store, settings, rank(await aggregate(store)))
         text = (settings.output.digest_dir / written[0]).read_text()
         heading = next(line for line in text.splitlines() if line.startswith("# "))
         # Every bracket that could close a link is escaped, so the heading
@@ -251,8 +261,10 @@ class TestObsidianNotes:
         assert heading.count("](") == heading.count("\\](")
         assert "\\[" in heading
         # And the frontmatter stays parseable YAML rather than raw brackets.
-        entity_line = next(line for line in text.splitlines() if line.startswith("entity:"))
-        assert entity_line.startswith('entity: "')
+        # `title:` since the note became shared property — the key names the note
+        # as a whole rather than this writer's view of it.
+        title_line = next(line for line in text.splitlines() if line.startswith("title:"))
+        assert title_line.startswith('title: "')
 
 
 class TestApi:
@@ -298,8 +310,25 @@ class TestApi:
     def test_notes_can_be_written_from_the_api(self, tmp_path, store: MemoryStore) -> None:
         self._seed(store)
         with self._client(tmp_path, store) as client:
-            body = client.post("/api/v1/entities/notes", headers=KEY).json()
+            body = client.post("/api/v1/entities/notes?min_mentions=2", headers=KEY).json()
         assert body["written"] == 1
+
+    def test_the_default_threshold_is_the_configured_one(
+        self, tmp_path, store: MemoryStore
+    ) -> None:
+        """Not `DEFAULT_MIN_MENTIONS`, which answers a different question.
+
+        That constant is the floor for *reporting* an entity; writing a file into
+        somebody's vault deserves a higher bar, and the endpoint has to use the
+        same one as the Friday job or a manual call silently rebuilds the vault
+        at a different size. The two-mention fixture below is under the default,
+        so nothing is written without an explicit override.
+        """
+        self._seed(store)
+        with self._client(tmp_path, store) as client:
+            body = client.post("/api/v1/entities/notes", headers=KEY).json()
+        assert body["min_mentions"] == 8
+        assert body["written"] == 0
 
 
 class TestEpisodeNotesLinkBack:
@@ -335,3 +364,138 @@ class TestItReadsRatherThanWrites:
         before = store.docs_of_type("episode")
         await aggregate(store)
         assert store.docs_of_type("episode") == before
+
+
+class TestATopicNoteKeepsItsFilename:
+    """`display_name` is a moving value; a filename must not be.
+
+    Surfaces accumulate as the corpus grows, so the most common spelling
+    changes — "Fortinet" until "Fortinet Inc." draws level, then the longer one
+    wins the tiebreak. `canonical` folds the two, so the *key* is stable and the
+    aggregation stays correct; only the filename moves.
+
+    That matters because `99 topics/` is section-owned. The file at the old path
+    still holds every other writer's section and the reader's own prose, none of
+    which migrates, while every existing wikilink keeps pointing at it.
+    """
+
+    def _entity(self, surfaces: dict[str, int]) -> Entity:
+        key = canonical(next(iter(surfaces)))
+        return Entity(
+            key=key,
+            surfaces=dict(surfaces),
+            shows={"A"},
+            episodes=[{"published_at": "2026-01-01T00:00:00Z", "title": "t", "podcast_name": "A"}]
+            * sum(surfaces.values()),
+        )
+
+    def test_the_display_name_really_does_move(self) -> None:
+        # The premise, pinned: if this ever stops being true the rest of this
+        # class is guarding nothing.
+        assert display_name({"Fortinet": 2}) == "Fortinet"
+        assert display_name({"Fortinet": 2, "Fortinet Inc.": 2}) == "Fortinet Inc."
+        # ...while canonical keeps both under one key, so it is only the name.
+        assert canonical("Fortinet") == canonical("Fortinet Inc.")
+
+    async def test_the_filename_survives_the_name_moving(
+        self, tmp_path: Path, store: MemoryStore
+    ) -> None:
+        settings = make_settings(tmp_path)
+        early = self._entity({"Fortinet": 2})
+        first = await write_entity_notes(store, settings, [early])
+        assert first == ["entities/fortinet.md"]
+
+        # The tie tips. Same entity, same key, longer spelling now wins.
+        later = self._entity({"Fortinet": 2, "Fortinet Inc.": 2})
+        assert display_name(later.surfaces) == "Fortinet Inc."
+        second = await write_entity_notes(store, settings, [later])
+
+        assert second == ["entities/fortinet.md"], "the note was renamed out from under its links"
+        notes = sorted(p.name for p in (settings.output.digest_dir / "entities").glob("*.md"))
+        assert notes == ["fortinet.md"], f"a second, orphaned note appeared: {notes}"
+
+    async def test_the_heading_still_follows_the_better_spelling(
+        self, tmp_path: Path, store: MemoryStore
+    ) -> None:
+        # Only the filename is pinned. The note should still read correctly as
+        # spellings settle, or pinning would freeze a bad early name on the page.
+        settings = make_settings(tmp_path)
+        await write_entity_notes(store, settings, [self._entity({"Fortinet": 2})])
+        await write_entity_notes(
+            store, settings, [self._entity({"Fortinet": 2, "Fortinet Inc.": 2})]
+        )
+        text = (settings.output.digest_dir / "entities/fortinet.md").read_text()
+        assert "# Fortinet Inc." in text
+        assert 'title: "Fortinet Inc."' in text
+
+    async def test_a_name_is_pinned_once_and_reused(
+        self, tmp_path: Path, store: MemoryStore
+    ) -> None:
+        settings = make_settings(tmp_path)
+        entity = self._entity({"Fortinet": 2})
+        await write_entity_notes(store, settings, [entity])
+        doc = await store.get(TOPIC_NAMES_DOC_ID)
+        assert doc is not None
+        assert doc["names"][entity.key] == "fortinet"
+
+    async def test_a_name_another_run_pinned_first_is_not_overwritten(
+        self, tmp_path: Path, store: MemoryStore
+    ) -> None:
+        # Two processes naming the same entity must not disagree about the file.
+        settings = make_settings(tmp_path)
+        entity = self._entity({"Fortinet Inc.": 3})
+        await store.put(
+            {
+                "_id": TOPIC_NAMES_DOC_ID,
+                "type": "control",
+                "key": "topic_names",
+                "names": {entity.key: "fortinet"},
+            }
+        )
+        written = await write_entity_notes(store, settings, [entity])
+        assert written == ["entities/fortinet.md"]
+
+
+class TestSeedingNamesFromNotesAlreadyInTheVault:
+    """A note whose entity has dropped below the threshold is written by nobody,
+    so nothing pins it. If it climbs back it would be named afresh, beside the
+    old file — which still holds the other writers' sections."""
+
+    async def test_existing_notes_keep_the_names_they_have(
+        self, tmp_path: Path, store: MemoryStore
+    ) -> None:
+        settings = make_settings(tmp_path)
+        directory = settings.output.digest_dir / "entities"
+        directory.mkdir(parents=True)
+        (directory / "fortinet.md").write_text(
+            '---\ntype: topic\ntitle: "Fortinet Inc."\n---\n\n# Fortinet Inc.\n',
+            encoding="utf-8",
+        )
+
+        result = await seed_topic_note_names(store, settings.output.digest_dir)
+        assert result == {"examined": 1, "pinned": 1}
+
+        doc = await store.get(TOPIC_NAMES_DOC_ID)
+        assert doc is not None
+        # Keyed by what the note is *about*, not by its filename.
+        assert doc["names"][canonical("Fortinet Inc.")] == "fortinet"
+
+    async def test_it_is_safe_to_run_twice(self, tmp_path: Path, store: MemoryStore) -> None:
+        settings = make_settings(tmp_path)
+        directory = settings.output.digest_dir / "entities"
+        directory.mkdir(parents=True)
+        (directory / "azure.md").write_text(
+            '---\ntitle: "Azure"\n---\n\n# Azure\n', encoding="utf-8"
+        )
+        await seed_topic_note_names(store, settings.output.digest_dir)
+        again = await seed_topic_note_names(store, settings.output.digest_dir)
+        assert again["pinned"] == 0
+
+    async def test_no_entities_directory_is_not_an_error(
+        self, tmp_path: Path, store: MemoryStore
+    ) -> None:
+        settings = make_settings(tmp_path)
+        assert await seed_topic_note_names(store, settings.output.digest_dir) == {
+            "examined": 0,
+            "pinned": 0,
+        }

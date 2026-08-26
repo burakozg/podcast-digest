@@ -34,6 +34,7 @@ from .logging_setup import get_logger
 from .sanitize import md_escape_inline, safe_url
 from .state import EpisodeStatus
 from .utils import format_duration, iso_now, utcnow
+from .vault import LiveSyncVault, project_file
 
 log = get_logger(__name__)
 
@@ -234,7 +235,9 @@ def period_name(settings: Settings, moment: datetime | None = None) -> str:
     return f"{year}-W{week:02d}"
 
 
-async def export_new_marks(store: Store, settings: Settings) -> dict[str, Any]:
+async def export_new_marks(
+    store: Store, settings: Settings, vault: LiveSyncVault | None = None
+) -> dict[str, Any]:
     """Write this period's marks, if there are any, and advance the cursor.
 
     Silent when nothing was marked: a file every week saying nothing teaches the
@@ -263,6 +266,7 @@ async def export_new_marks(store: Store, settings: Settings) -> dict[str, Any]:
     path = _atomic_write(
         settings.output.digest_dir, Path(OUTPUT_DIR) / f"{period_name(settings)}.md", body
     )
+    await project_file(vault, settings.output.digest_dir, path)
     await advance_cursor(store, until)
 
     result: dict[str, Any] = {

@@ -18,17 +18,21 @@ tags: [podcast-digest, cybersecurity]
 ## Top picks
 
 ### 🎙️ Test Show — Deep dive: PLC malware  `9/10`
+<!-- ep:episode:26b5129a00fa9a5e244f72603229a689f722298e710a156f5a2d606ca0642694 -->
 
 *Published 2026-07-28 · 1 h 02 min · basis: local transcription · [episode link](https://example.com/ep1)*
 
 **Why it matters:** Directly relevant to your OT/ICS remit.
 
+<!-- full -->
 The hosts trace a **PLC** compromise at a water utility.
 
 **Key takeaways:**
 
 - Segment OT networks
 - Patch the HMI
+
+<!-- /full -->
 
 **Interests matched:** OT/ICS security
 
@@ -37,14 +41,17 @@ The hosts trace a **PLC** compromise at a water utility.
 ## Also relevant
 
 ### Test Show — Briefly relevant episode  `6/10`
+<!-- ep:episode:df5f554b3e39091f5f02bf65b137e6249a5a08669aab9a69012071f453fb15ae -->
 
 *2026-07-28 · 1 h 02 min · basis: description only (no transcript available) · [link](https://example.com/ep1)*
 
 **Why it matters:** Directly relevant to your OT/ICS remit.
 
+<!-- full -->
 - Segment OT networks
 - Patch the HMI
 
+<!-- /full -->
 *Interests: OT/ICS security*
 
 ## Maybe interesting (not summarised)

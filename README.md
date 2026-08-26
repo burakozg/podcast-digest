@@ -53,7 +53,7 @@ after each entry is what adopting it takes on a deployment already running.
        refactors, test fixes and tidying get no entry.
      - Newest first. Keep about 8; drop the oldest, but never the initial
        release -- it is the floor of the list.
-     - Adoption tag: `restart` (config only), `rebuild` (code: ./qnap/deploy.sh),
+     - Adoption tag: `restart` (config only), `rebuild` (code: ./deploy),
        and name any var that must be in the NAS `.env` BEFORE the compose file is
        overwritten. See DEPLOY-NAS.md, "Redeploying after a code change".
      - Full history is git log. This list never claims completeness. -->
@@ -667,6 +667,100 @@ exactly what it looks like.
 
 Per-episode note files (`output.episode_notes: true`) are off by default.
 
+### Into Obsidian, without copying files
+
+Digests are files on a disk, which is only useful on the machine holding that
+disk. The `vault:` section closes the gap by writing into the CouchDB an
+Obsidian vault replicates against, in [Self-hosted
+LiveSync](https://github.com/vrtmrz/obsidian-livesync)'s own document format — so
+the digest materialises as a real note on every device that syncs, phone
+included. Nothing mounts a share, and nothing but the NAS has to be awake.
+
+```yaml
+vault:
+  enabled: true
+  couchdb_url: null          # set PODAGENT_VAULT__COUCHDB_URL — deployment topology
+  db: vault
+  user: podagent
+  folder: 11 podcasts/digests
+  episodes_folder: 11 podcasts/episodes
+  entities_folder: 99 topics
+```
+
+The password goes in `PODAGENT_VAULT_COUCHDB_PASSWORD`. This is *your vault's*
+database, not this app's own — a different address, user and password.
+
+Weekly digests, `signals/` files, one note per summarised episode and the topic
+notes go into the vault; the per-podcast archive notes and the narration audio do
+not, because a couple of hundred generated notes would swamp a personal vault.
+`POST /api/v1/vault/sync` runs a catch-up pass for the first time you switch it
+on, or for whatever an outage missed.
+
+**The layout, and why it is shaped this way:**
+
+```
+11 podcasts/
+  digests/
+    2026/podcast-digest-2026-W35.md
+    signals/2026-W35.md
+  episodes/
+    Risky Business/2026-08-21-when-companies-can-hack-back.md
+    CyberWire Daily/2026-08-20-...
+99 topics/
+  anthropic.md
+```
+
+Everything this application writes is under one root, split into what you read
+once a week and the several hundred notes those link *at*. Episode notes are
+grouped by show because six hundred files in one folder is a list nobody scrolls.
+
+Topic notes are filed apart, in `99 topics`, because they are a different kind of
+thing and not only ours: two other applications write into the same notes, each
+owning its own marked section. One note per entity mentioned in at least
+`pipeline.entity_note_min_mentions` episodes — 8 by default, which on this corpus
+is 137 notes rather than the 1,269 a threshold of 2 would produce.
+
+None of this affects links. Obsidian resolves `[[wikilinks]]` by filename, not by
+path, so where a note sits changes nothing about the graph — the layout is only
+about what a folder looks like when you open it.
+
+Episode notes and topic notes are rebuilt every Friday at 06:45, after the digest
+and the signals export, since they aggregate what those just published.
+
+**The text is adapted on the way into the vault, not in the template.** The file
+on disk also serves the console (which renders it as HTML) and the narrator
+(which reads it aloud), and both show `[[wikilinks]]` verbatim — so the
+conversion happens at the vault boundary, where it is the only reader. Two
+changes: entities that have a topic note become links to it, and the narration
+embed becomes a line of text rather than an audio player for a file that was
+never synced. An entity below the threshold stays plain text; links are only
+ever made to notes that exist, so the digest gains no dangling links.
+
+Three behaviours worth knowing:
+
+- **A note you delete in Obsidian stays deleted.** Re-projecting would be the
+  software arguing with you about your own vault, so it is skipped and logged
+  rather than restored. This holds for deletions made in Obsidian, which LiveSync
+  records by flagging the document; a document purged directly from CouchDB is
+  indistinguishable from one that never existed, and would be written again.
+- **A note that moves finishes moving.** When the layout changes, or a show
+  renames itself, the copy at the old path is retired the same way Obsidian's own
+  deletion replicates. Two files with one name would make every link to that name
+  ambiguous, and Obsidian picks one of them without saying so. It sweeps only
+  folders this application has abandoned — never a digest, never a topic note —
+  and never when the digest directory is empty, since an unmounted volume looks
+  exactly like a corpus with nothing in it.
+- **An unreachable vault never fails a digest.** The file is already on disk and
+  is the deliverable; a database asleep on another machine is an operator
+  problem, so it is logged and retried, exactly like `SpeechUnavailable`.
+- **LiveSync's end-to-end encryption and path obfuscation must be off.** The
+  projection writes plaintext chunks keyed by vault path; either setting turns
+  every projected note into unreadable noise.
+
+The document format is reverse-engineered rather than published, so
+[`tests/test_vault.py`](tests/test_vault.py) pins it — if a plugin upgrade
+changes the shape, those assertions are what will say so.
+
 ### Reader marks, for something else to read
 
 Stars and wrong-call flags are useful to the console and invisible to anything
@@ -718,8 +812,9 @@ calling it twice does not repeat a mark.
 | `GET /api/v1/search/status` · `POST .../sync` · `POST .../rebuild` | Search index state, incremental sync, full rebuild |
 | `GET /api/v1/insights/precision` | Precision report over stars/reads/flags (`?days=`) |
 | `GET /api/v1/entities` · `GET /api/v1/entities/{key}` | Named things across the corpus; one entity with its timeline |
-| `POST /api/v1/entities/notes` | Write one Obsidian note per entity |
+| `POST /api/v1/entities/notes` | Rebuild the topic notes and project them (`?min_mentions=`) |
 | `POST /api/v1/signals/export` | Mirror starred/flagged episodes into `reading-signals.md` |
+| `POST /api/v1/vault/sync` | Project digests, signals, episode notes and topic notes into the Obsidian vault (409 when `vault.enabled` is false) |
 | `GET /api/v1/content/seeds` | Preview which episodes qualify as writing material (no model call) |
 | `POST /api/v1/content/seeds` | Find openings worth writing about → `content-seeds.md` |
 | `GET /api/v1/digests` | Every digest generated, newest week first |

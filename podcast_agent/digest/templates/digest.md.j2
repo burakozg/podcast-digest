@@ -63,11 +63,13 @@ Nothing new in this period.
 
 {% for e in top_picks %}
 ### 🎙️ {{ e.podcast_name }} — {{ e.title }}  `{{ e.score }}/10`
+<!-- ep:{{ e.episode_id }} -->
 
 *Published {{ e.published_date }}{% if e.carried_over %} · carried over{% endif %} · {{ e.duration }} · basis: {{ e.basis_label }}{% if e.link %} · [episode link]({{ e.link }}){% endif %}{% if e.listen_anyway %} · **worth hearing in full**{% endif %}*
 
 **Why it matters:** {{ e.why_it_matters }}
 
+<!-- full -->
 {{ e.summary_md }}
 
 {% if e.key_takeaways %}
@@ -78,6 +80,8 @@ Nothing new in this period.
 {% endfor %}
 
 {% endif %}
+<!-- /full -->
+
 {% if e.interests %}
 **Interests matched:** {{ e.interests | join(' · ') }}
 
@@ -93,17 +97,20 @@ Nothing new in this period.
 
 {% for e in also_relevant %}
 ### {{ e.podcast_name }} — {{ e.title }}  `{{ e.score }}/10`
+<!-- ep:{{ e.episode_id }} -->
 
 *{{ e.published_date }}{% if e.carried_over %} · carried over{% endif %} · {{ e.duration }} · basis: {{ e.basis_label }}{% if e.link %} · [link]({{ e.link }}){% endif %}*
 
 **Why it matters:** {{ e.why_it_matters }}
 
+<!-- full -->
 {% if e.key_takeaways %}
 {% for bullet in e.key_takeaways[:4] %}
 - {{ bullet }}
 {% endfor %}
 
 {% endif %}
+<!-- /full -->
 {% if e.interests %}
 *Interests: {{ e.interests | join(' · ') }}*
 

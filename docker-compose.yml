@@ -47,11 +47,29 @@ services:
       PODAGENT_OPENROUTER_API_KEY: ${PODAGENT_OPENROUTER_API_KEY:-}
       PODAGENT_ANTHROPIC_API_KEY: ${PODAGENT_ANTHROPIC_API_KEY:-}
       PODAGENT_COUCHDB__URL: http://couchdb-podcast:5984
+      # The CouchDB an Obsidian vault replicates against, for projecting digests
+      # into it over Self-hosted LiveSync. A *different* database from the one
+      # above, so its own address, account and password.
+      #
+      # The whole section is switched on from here rather than from the console:
+      # `vault` is deliberately not console-overridable (where your notes get
+      # sent is not a setting to fat-finger in a browser), and config.yaml is
+      # mounted read-only, so the environment is the only lever. All five are
+      # optional and the defaults are inert — an untouched .env leaves the
+      # feature off and the app boots normally.
+      PODAGENT_VAULT__ENABLED: ${VAULT_ENABLED:-false}
+      PODAGENT_VAULT__COUCHDB_URL: ${VAULT_COUCHDB_URL:-}
+      PODAGENT_VAULT__DB: ${VAULT_DB:-vault}
+      PODAGENT_VAULT__USER: ${VAULT_USER:-podagent}
+      PODAGENT_VAULT_COUCHDB_PASSWORD: ${VAULT_COUCHDB_PASSWORD:-}
       # Threads are capped so ASR cannot starve the rest of the NAS.
       OMP_NUM_THREADS: "4"
     volumes:
       - ./config.yaml:/config/config.yaml:ro
-      # Point this at your synced Obsidian vault folder.
+      # Where digests are written. Either point this at a synced folder, or
+      # leave it beside the rest of the app's state and let the `vault:` section
+      # project into Obsidian over LiveSync instead — the second needs no folder
+      # to be shared with anything.
       - ${DIGEST_DIR:-./data/digests}:/data/digests
       # Audio scratch + Whisper model cache. Local disk, not the synced folder.
       - podcast-work:/data/work

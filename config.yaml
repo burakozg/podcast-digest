@@ -163,6 +163,10 @@ scheduler:
   digest_cron: "0 6 * * fri"        # Friday 06:00 local
   retention_cron: "0 4 * * *"       # daily 04:00 local
   narrate_cron: "20 * * * *"        # hourly; does nothing unless tts.enabled
+  # Rebuilds the vault's topic notes. Last in the Friday sequence -- digest at
+  # 06:00, reader signals at 06:30, topics at 06:45 -- because it aggregates
+  # what those just published. Only registered when vault.enabled is true.
+  entities_cron: "45 6 * * fri"
   run_on_startup: false
 
 pipeline:
@@ -174,6 +178,12 @@ pipeline:
   digest_threshold: 5
   # Score at or above which an episode is a "top pick" rather than "also relevant".
   top_pick_threshold: 8
+  # Mentions before an entity earns a topic note of its own in the vault. On this
+  # corpus: 2 -> 1269 notes, 5 -> 297, 8 -> 137, 12 -> 81. A personal vault of a
+  # couple of hundred notes is drowned by the first and informed by the third.
+  # Nothing is lost by raising it -- the entity still appears in the digest, just
+  # as plain text rather than a link.
+  entity_note_min_mentions: 8
   # On a fresh DB, ignore anything published longer ago than this (backfill guard).
   initial_lookback_days: 14
   max_retries: 3
@@ -319,10 +329,52 @@ tts:
   max_chars_per_request: 3000
   timeout_s: 600
 
+# Projecting the digest into an Obsidian vault over Self-hosted LiveSync, so it
+# is readable on a phone without copying files anywhere. Writes LiveSync's own
+# document shape into the CouchDB your vault replicates against -- which is NOT
+# this app's database (see `couchdb:` below), it is whichever one the plugin is
+# pointed at.
+#
+# Off by default: it needs an address and credentials for someone else's
+# database, and there is no sensible default for either. Set the URL via
+# PODAGENT_VAULT__COUCHDB_URL and the password via
+# PODAGENT_VAULT_COUCHDB_PASSWORD rather than here -- deployment topology and a
+# secret respectively, exactly like asr.remote_url and the LLM keys.
+#
+# Requires E2EE and path obfuscation to be OFF in the LiveSync plugin: the
+# projection writes plaintext chunks keyed by vault path, so either setting
+# turns every projected file into unreadable noise.
+vault:
+  enabled: false
+  couchdb_url: null
+  db: vault
+  user: podagent
+  # Everything this application writes lives under one root folder, "11
+  # podcasts", split in two: the digests and the weekly signals file here,
+  # the per-episode notes below. Where a note lives changes nothing about
+  # links or the graph -- Obsidian resolves [[wikilinks]] by filename, not by
+  # path -- so this is only about what a folder looks like when opened.
+  folder: 11 podcasts/digests
+  # Entity notes are filed separately, as topics rather than as raw capture:
+  # they are what every digest's [[wikilinks]] point at, and they accumulate
+  # instead of being read once and set aside.
+  entities_folder: 99 topics
+  # Per-episode notes: what a topic note's lines link to, the way
+  # security-digest's story notes are what its lines link to. Grouped one
+  # level deeper into a folder per show, so the folder is browsable rather
+  # than an undifferentiated list of several hundred files. Written only when
+  # output.episode_notes is true.
+  episodes_folder: 11 podcasts/episodes
+  timeout_s: 30
+
 output:
   digest_dir: /data/digests
   work_dir: /data/work
-  episode_notes: false
+  # One note per summarised episode, corpus-wide. This is what makes a topic
+  # note's lines clickable -- without it 82% of them lead nowhere, because only
+  # episodes that reached a weekly digest have anything to link to.
+  # ~970 notes on this corpus.
+  episode_notes: true
 
 couchdb:
   url: http://couchdb-podcast:5984

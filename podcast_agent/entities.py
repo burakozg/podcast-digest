@@ -24,10 +24,11 @@ from pathlib import Path
 from typing import Any
 
 from .config import Settings
-from .db import Doc, Store, typed_sort
+from .db import ConflictError, Doc, NotFoundError, Store, typed_sort, update_doc
 from .logging_setup import get_logger
+from .notes import ENTITIES_DIR, KEY_PREFIX, wrap
 from .sanitize import md_escape_inline, slugify
-from .utils import iso, utcnow
+from .utils import iso, iso_now, utcnow
 
 log = get_logger(__name__)
 
@@ -213,64 +214,186 @@ def window_start(days: int | None) -> str | None:
 # --- Obsidian notes ---------------------------------------------------------
 
 
-def _note_body(entity: Entity, *, week_of: dict[str, str]) -> str:
-    """One entity note. Wikilinks so the vault's graph view has edges to draw."""
+#: Characters that would break out of `[[note|Label]]` syntax — a pipe ends the
+#: alias, brackets end the link. Titles are model-adjacent feed data (§10.2), and
+#: podcast titles really do contain all three ("VCISO Tradecraft | Carlota Sage").
+#: Substituted rather than treated as a reason to skip the link: 18 episodes lost
+#: theirs to a bracket before this existed, which is a worse trade than a
+#: character that reads slightly differently.
+_ALIAS_SAFE = str.maketrans({"|": "-", "[": "(", "]": ")"})
+
+
+def _alias(title: str) -> str:
+    r"""A wikilink label. Markdown escaping is undone first: inside `[[…|…]]`
+    Obsidian renders the alias literally, so a `\|` would show as a backslash."""
+    return title.replace("\\", "").translate(_ALIAS_SAFE).strip()
+
+
+def _note_body(
+    entity: Entity, *, week_of: dict[str, str], note_of: dict[str, str] | None = None
+) -> str:
+    """This writer's contribution to one topic note.
+
+    A complete note as it would be created fresh — frontmatter, title, and a
+    single region marked as ours. When the note already exists in the vault only
+    the marked region and the prefixed frontmatter keys are taken from this; see
+    :mod:`.notes`, which is the contract a second application writing to the same
+    file has to follow.
+    """
     # Escaped for the heading, JSON-quoted for the frontmatter. These strings
     # are model output over an automatic transcript (§10.2): unquoted, a name
     # containing a bracket breaks the YAML, and unescaped it renders as a link
     # in the heading.
     safe = md_escape_inline(entity.name, max_chars=MAX_ENTITY_CHARS)
-    lines = [
-        "---",
-        "type: podcast-entity",
-        f"entity: {json.dumps(entity.name)}",
-        f"mentions: {entity.mentions}",
-        f"shows: {len(entity.shows)}",
-        f"first_seen: {entity.first_seen[:10]}",
-        f"last_seen: {entity.last_seen[:10]}",
-        "tags: [podcast-entity, cybersecurity]",
-        "---",
-        "",
-        f"# {safe}",
+    front = [
+        "type: topic",
+        f"title: {json.dumps(entity.name)}",
+        "tags: [topic]",
+        f"{KEY_PREFIX}mentions: {entity.mentions}",
+        f"{KEY_PREFIX}shows: {len(entity.shows)}",
+        f"{KEY_PREFIX}first_seen: {entity.first_seen[:10]}",
+        f"{KEY_PREFIX}last_seen: {entity.last_seen[:10]}",
+    ]
+    section = [
+        "## From podcasts",
         "",
         f"*{entity.mentions} episode{'s' if entity.mentions != 1 else ''} "
         f"across {len(entity.shows)} show{'s' if len(entity.shows) != 1 else ''} · "
         f"{entity.first_seen[:10]} → {entity.last_seen[:10]}*",
         "",
-        "## Mentioned in",
-        "",
     ]
+    notes = note_of or {}
     for ref in sorted(entity.episodes, key=lambda e: e["published_at"] or "", reverse=True):
         date = (ref["published_at"] or "")[:10]
         score = f" `{ref['score']}/10`" if ref.get("score") is not None else ""
         title = md_escape_inline(ref["title"], max_chars=160)
         show = md_escape_inline(ref["podcast_name"], max_chars=80)
+        # The episode's own note is what the line is *about*, so that is what the
+        # title links to — the same shape security-digest and the clippings
+        # importer use. Plain text when no note exists, never a dangling link.
+        note = notes.get(str(ref.get("episode_id") or ""))
+        subject = f"[[{note}|{_alias(title)}]]" if note else title
+        # The week stays as a second, smaller link: it is where the episode
+        # shipped, which is a different question from what the episode said.
         digest = week_of.get(str(ref.get("digest_id") or ""))
         where = f" — [[podcast-digest-{digest}]]" if digest else ""
-        lines.append(f"- {date} · **{show}** — {title}{score}{where}")
-    lines.append("")
-    return "\n".join(lines)
+        section.append(f"- {date} · **{show}** — {subject}{score}{where}")
+
+    return (
+        "---\n" + "\n".join(front) + "\n---\n\n" + f"# {safe}\n\n" + wrap("\n".join(section)) + "\n"
+    )
 
 
-def write_entity_notes(
+#: Where the chosen filename of each topic note is remembered.
+#:
+#: A note's filename is part of the contract, not a rendering detail: links
+#: resolve by filename, and a shared note's other writers — plus the reader's own
+#: prose — live in the file at that path. So it is chosen once and pinned here,
+#: never recomputed. See :func:`resolve_note_names`.
+TOPIC_NAMES_DOC_ID = "control:topic_names"
+
+#: The same idea one level down: an episode note's filename. Publishers edit
+#: titles, so a name derived from one moves exactly as a topic name does — see
+#: `homelab/TOPIC-NOTE-NAMING.md`. Keyed by `episode_id`, which never changes.
+EPISODE_NAMES_DOC_ID = "control:episode_names"
+
+
+async def pin_note_names(
+    store: Store, proposed: dict[str, str], *, doc_id: str = TOPIC_NAMES_DOC_ID
+) -> dict[str, str]:
+    """Record a filename for each key that does not have one. Returns them all.
+
+    Gap-filling only, never reassignment: a name pinned by an earlier run — or by
+    another process racing this one — always wins, so two runs cannot rename a
+    note between them. The document is created on first use, and a lost creation
+    race is retried rather than overwritten.
+    """
+    # Captured from the mutator rather than read off the write: `store.put`
+    # answers with CouchDB's `{id, rev}` ack, not the stored document, so
+    # `update_doc`'s return value carries no fields to read back.
+    merged: dict[str, str] = {}
+    added = 0
+
+    def _fill(doc: Doc) -> None:
+        nonlocal added, merged
+        doc.setdefault("type", "control")
+        doc.setdefault("key", doc_id.split(":", 1)[-1])
+        names = dict(doc.get("names") or {})
+        before = len(names)
+        for key, name in proposed.items():
+            names.setdefault(key, name)
+        added = len(names) - before
+        doc["names"] = names
+        doc["updated_at"] = iso_now()
+        merged = names
+
+    try:
+        await update_doc(store, doc_id, _fill)
+    except NotFoundError:
+        seed: Doc = {"_id": doc_id}
+        _fill(seed)
+        try:
+            await store.put(seed)
+        except ConflictError:
+            # Another process created it first; fold ours into theirs.
+            await update_doc(store, doc_id, _fill)
+
+    if added:
+        log.info("entities.notes_named", doc=doc_id, newly_named=added)
+    return merged
+
+
+async def resolve_note_names(store: Store, entities: list[Entity]) -> dict[str, str]:
+    """``entity key -> note filename``, choosing a name only for the unnamed.
+
+    ``display_name`` is a *moving* value: it returns the most common surface, and
+    surfaces accumulate as the corpus grows, so the winner changes. Two spellings
+    that ``canonical`` folds but ``slugify`` does not — "Fortinet" and "Fortinet
+    Inc." — will eventually swap places, and the note would be written to a new
+    path with nothing deleting the old one.
+
+    That is not merely untidy. ``99 topics/`` is section-owned: the file at the
+    old path still holds every *other* writer's section and whatever the reader
+    wrote, and none of it migrates. Every existing wikilink points at the orphan
+    while new ones point at a note containing only our own section, so the graph
+    shows two nodes where there is one thing.
+
+    Pinning the first choice costs one document read per run and makes the
+    filename stable for as long as the entity exists. The heading and ``title:``
+    still follow the current display name, so the note reads correctly as
+    spellings settle — it is only the filename, which links depend on, that is
+    frozen.
+    """
+    names = await pin_note_names(
+        store, {entity.key: slugify(entity.name) or entity.key for entity in entities}
+    )
+    return {entity.key: names.get(entity.key) or entity.key for entity in entities}
+
+
+async def write_entity_notes(
+    store: Store,
     settings: Settings,
     entities: list[Entity],
     *,
     week_of: dict[str, str] | None = None,
+    note_of: dict[str, str] | None = None,
 ) -> list[str]:
     """Write one note per entity under ``entities/`` in the digest directory.
 
-    Rewritten wholesale each time rather than appended to: the note is a view of
-    the corpus, and a stale line in it is worse than a rebuilt file, because the
-    reader cannot tell which lines are current.
+    Our *section* of each note is rewritten wholesale rather than appended to:
+    it is a view of the corpus, and a stale line in it is worse than a rebuilt
+    one because the reader cannot tell which lines are current. The filename is
+    the opposite — chosen once and never recomputed (:func:`resolve_note_names`).
     """
-    directory = settings.output.digest_dir / "entities"
+    directory = settings.output.digest_dir / ENTITIES_DIR
     directory.mkdir(parents=True, exist_ok=True)
+    names = await resolve_note_names(store, entities)
     written: list[str] = []
     for entity in entities:
-        name = slugify(entity.name) or entity.key
-        path = directory / f"{name}.md"
-        path.write_text(_note_body(entity, week_of=week_of or {}), encoding="utf-8")
+        path = directory / f"{names[entity.key]}.md"
+        path.write_text(
+            _note_body(entity, week_of=week_of or {}, note_of=note_of), encoding="utf-8"
+        )
         written.append(str(path.relative_to(settings.output.digest_dir)))
     log.info("entities.notes_written", count=len(written), directory=str(directory))
     return written
@@ -296,5 +419,12 @@ def timeline(entity: Entity) -> list[dict[str, Any]]:
     return [{"month": m, "mentions": per_month[m]} for m in sorted(per_month)]
 
 
-def note_path(settings: Settings, entity: Entity) -> Path:
-    return settings.output.digest_dir / "entities" / f"{slugify(entity.name) or entity.key}.md"
+def note_path(settings: Settings, name: str) -> Path:
+    """Path of a topic note, given the *pinned* name from :func:`resolve_note_names`.
+
+    Takes a name rather than an Entity on purpose. It used to derive one from
+    `entity.name`, which is exactly the recomputation that moves a note's
+    filename out from under every link pointing at it — so the derivation now
+    happens in one place, once per entity, and this only joins the path.
+    """
+    return settings.output.digest_dir / ENTITIES_DIR / f"{name}.md"

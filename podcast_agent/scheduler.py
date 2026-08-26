@@ -41,6 +41,7 @@ def build_scheduler(
     search: SearchIndex | None = None,
     signals: Callable[[], Awaitable[Any]] | None = None,
     narrate: Callable[[], Awaitable[Any]] | None = None,
+    entities: Callable[[], Awaitable[Any]] | None = None,
 ) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(
         timezone=settings.scheduler.timezone,
@@ -67,6 +68,13 @@ def build_scheduler(
         # synthesises is a laptop, so the retry cadence — not the digest cron —
         # is what decides how long a sleeping Mac delays the week's audio.
         jobs.append(("digest_narrate", settings.scheduler.narrate_cron, narrate))
+    if entities is not None:
+        # Last in the Friday sequence, after the digest and the signals export,
+        # because it aggregates everything they just published. Nothing else
+        # rebuilds these: without this job the topic notes are as current as the
+        # last time somebody called the endpoint by hand, and a stale timeline
+        # reads exactly like an accurate one.
+        jobs.append(("entity_notes", settings.scheduler.entities_cron, entities))
     if search is not None:
         # Without this the index is only ever as current as the last manual
         # rebuild, which is the failure mode nobody notices: search quietly

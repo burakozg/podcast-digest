@@ -75,6 +75,9 @@ OVERRIDABLE_PIPELINE_KEYS = frozenset(
         "t_rel_high",
         "digest_threshold",
         "top_pick_threshold",
+        # How busy the vault's topic graph gets is a preference, and the cost of
+        # getting it wrong is only a folder to re-generate.
+        "entity_note_min_mentions",
         "initial_lookback_days",
         "digest_catch_up_days",
         "weekly_synthesis",

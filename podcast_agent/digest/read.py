@@ -18,6 +18,7 @@ import yaml
 
 from ..logging_setup import get_logger
 from ..sanitize import md_to_safe_html
+from ..vault_anchors import strip_vault_anchors
 
 log = get_logger(__name__)
 
@@ -114,6 +115,11 @@ def read_digest(digest_dir: Path, relative: str) -> dict[str, Any]:
         raise DigestUnreadable(f"could not read {relative!r}: {exc}") from exc
 
     frontmatter, body = split_frontmatter(text)
+    # The vault projection's anchors (`<!-- ep:… -->`, `<!-- full -->`) are real
+    # HTML comments, which Obsidian ignores and the narrator drops — but
+    # `md_to_safe_html` *escapes* raw HTML rather than dropping it, so left in
+    # they would render as visible `&lt;!-- ep:… --&gt;` in the console.
+    body = strip_vault_anchors(body)
     return {
         "frontmatter": frontmatter,
         "markdown": body,
