@@ -58,6 +58,13 @@ after each entry is what adopting it takes on a deployment already running.
        overwritten. See DEPLOY-NAS.md, "Redeploying after a code change".
      - Full history is git log. This list never claims completeness. -->
 
+- The weekly digest, one note per episode and one per topic are written straight
+  into an Obsidian vault, linking each other ([`fac8a1f`](../../commit/fac8a1f))
+  — *rebuild, and `VAULT_ENABLED` / `VAULT_COUCHDB_URL` / `VAULT_DB` /
+  `VAULT_USER` / `VAULT_COUCHDB_PASSWORD` in the NAS `.env`*
+- Deploying is `./deploy` with `ship` / `apply` / `check`, the same three verbs
+  as the other NAS projects ([`5796e4f`](../../commit/5796e4f)) — *rebuild, and
+  `NAS_LAN_IP` becomes `APP_LAN_IP` in the NAS `.env` (the old name still works)*
 - Archive episodes stay queued instead of erroring when the transcriber is
   asleep ([`4b1385b`](../../commit/4b1385b)) — *rebuild*
 - Summaries come from Qwen3.8 27B, with its thinking turned off so a truncated
@@ -71,8 +78,6 @@ after each entry is what adopting it takes on a deployment already running.
   `ASR_REMOTE_URL` in the NAS `.env`*
 - Console settings rank below environment variables rather than above everything
   ([`f005b52`](../../commit/f005b52)) — *rebuild*
-- The dev CouchDB password is generated rather than published in the repo
-  ([`dde8521`](../../commit/dde8521)) — *fresh setup only*
 - Initial release: ingestion, two-tier triage, ASR, weekly digest, consoles
   ([`56a8761`](../../commit/56a8761))
 
