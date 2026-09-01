@@ -58,6 +58,8 @@ after each entry is what adopting it takes on a deployment already running.
        overwritten. See DEPLOY-NAS.md, "Redeploying after a code change".
      - Full history is git log. This list never claims completeness. -->
 
+- A finished summary is no longer captioned with a failure the episode got past
+  ([`9d57417`](../../commit/9d57417)) — *rebuild*
 - The weekly digest, one note per episode and one per topic are written straight
   into an Obsidian vault, linking each other ([`fac8a1f`](../../commit/fac8a1f))
   — *rebuild, and `VAULT_ENABLED` / `VAULT_COUCHDB_URL` / `VAULT_DB` /
@@ -76,8 +78,6 @@ after each entry is what adopting it takes on a deployment already running.
 - Transcription can run on another machine over the OpenAI audio API, so the NAS
   stops doing Whisper ([`738a788`](../../commit/738a788)) — *rebuild, and
   `ASR_REMOTE_URL` in the NAS `.env`*
-- Console settings rank below environment variables rather than above everything
-  ([`f005b52`](../../commit/f005b52)) — *rebuild*
 - Initial release: ingestion, two-tier triage, ASR, weekly digest, consoles
   ([`56a8761`](../../commit/56a8761))
 
