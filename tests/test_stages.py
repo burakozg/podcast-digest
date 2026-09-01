@@ -799,6 +799,86 @@ class TestSlightlyOffSpecOutputIsUsed:
         assert ChunkBullets(entities=entities, bullets=["a", "b"]).entities == entities
 
 
+class TestASucceedingStageErasesItsOwnFailure:
+    """A failure the episode got past must not be shown as its current state.
+
+    Thirteen published episodes displayed "no transcript from any strategy" in
+    red underneath a summary written *from their transcript*: the first attempt
+    failed, a later one succeeded, and nothing cleared the record. `last_error`
+    is what the console reports as the episode's problem, so a stale one is a
+    permanent false alarm.
+    """
+
+    def _stage(self, tmp_path: Path, store: MemoryStore):
+        from podcast_agent.transcripts.acquire import TranscriptAcquirer
+        from podcast_agent.transcripts.stage import TranscriptStage
+
+        settings = make_settings(tmp_path)
+        return TranscriptStage(
+            settings,
+            store,
+            TranscriptAcquirer(  # type: ignore[arg-type]
+                settings, store, build_client(), UrlGuard(settings.security), None
+            ),
+        )
+
+    async def _retry_after_a_failure(self, tmp_path: Path, store: MemoryStore) -> dict:
+        """Fail once with nothing to try, then succeed from a feed transcript."""
+        episode = make_episode(
+            guid="flaky", status=EpisodeStatus.AWAITING_TRANSCRIPT, feed_transcripts=[]
+        )
+        store.seed(episode)
+        stage = self._stage(tmp_path, store)
+        await stage.process(episode, allow_asr=False)
+
+        doc = next(iter(store.docs_of_type("episode")))
+        assert doc["last_error"], "precondition: the first attempt recorded a failure"
+
+        doc["feed_transcripts"] = [
+            {"url": "https://transcript-host.net/a.txt", "type": "text/plain"}
+        ]
+        doc["status"] = EpisodeStatus.AWAITING_TRANSCRIPT.value
+        with respx.mock:
+            respx.get("https://transcript-host.net/a.txt").mock(
+                return_value=httpx.Response(200, text="word " * 500)
+            )
+            await stage.process(doc)
+        return next(iter(store.docs_of_type("episode")))
+
+    async def test_a_transcript_that_arrives_late_clears_the_error(
+        self, tmp_path: Path, store: MemoryStore
+    ) -> None:
+        doc = await self._retry_after_a_failure(tmp_path, store)
+
+        assert doc["status"] == EpisodeStatus.TRANSCRIBED.value
+        assert doc["last_error"] is None, "the stage succeeded; its old failure is not news"
+
+    async def test_the_transcript_itself_is_still_stored(
+        self, tmp_path: Path, store: MemoryStore
+    ) -> None:
+        """Guards the clear: erasing the wrong key would pass the test above."""
+        doc = await self._retry_after_a_failure(tmp_path, store)
+
+        assert doc["transcript_source"] == "feed"
+        assert doc["transcript_chars"] > 0
+
+    async def test_a_failure_from_another_stage_survives(self) -> None:
+        """Tier-1 is independent — acquiring a transcript says nothing about it."""
+        from podcast_agent.episodes import TRANSCRIPT_STAGES, clear_error
+
+        doc = {"last_error": {"stage": "tier1", "message": "model refused"}}
+        clear_error(doc, TRANSCRIPT_STAGES)
+        assert doc["last_error"] is not None
+
+    async def test_the_archive_walk_labels_the_same_stage_differently(self) -> None:
+        """`backfill_transcript` is the same failure under the other loop's name."""
+        from podcast_agent.episodes import TRANSCRIPT_STAGES, clear_error
+
+        doc = {"last_error": {"stage": "backfill_transcript", "message": "no transcript"}}
+        clear_error(doc, TRANSCRIPT_STAGES)
+        assert doc["last_error"] is None
+
+
 class TestHopelessTranscriptFailuresDoNotRetry:
     """Retrying only makes sense when something could have worked.
 

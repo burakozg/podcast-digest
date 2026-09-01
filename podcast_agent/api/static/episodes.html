@@ -476,6 +476,17 @@
     return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m`;
   }
 
+  // Is the recorded failure history rather than the episode's current state?
+  //
+  // Red means "this episode is stuck". An episode carrying a summary is not
+  // stuck, whatever it hit on the way: a description-only summary is the
+  // designed outcome of a transcript that could not be had, and the basis line
+  // already says so. Painting that red under every such summary reports the
+  // pipeline working as a fault — 23 published episodes read that way.
+  function errorIsHistory(e, hasSummary) {
+    return Boolean(hasSummary) && e.status !== "ERROR";
+  }
+
   function whyNoSummary(e) {
     const route = (e.tier0 || {}).route;
     // Historical intake decides some episodes are worth indexing but not
@@ -578,7 +589,10 @@
         html += `<p class="sub" style="margin-top:.8rem">No summary yet.</p>`;
       }
       if (e.last_error) {
-        html += `<p class="sub" style="margin-top:.8rem;color:var(--bad)">Last error (${
+        const past = errorIsHistory(e, t1.summary_md);
+        const label = past ? "Earlier failure" : "Last error";
+        const colour = past ? "" : ";color:var(--bad)";
+        html += `<p class="sub" style="margin-top:.8rem${colour}">${label} (${
           esc(e.last_error.stage)}): ${esc(e.last_error.message)}</p>`;
       }
       renderSignals(e);

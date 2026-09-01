@@ -95,6 +95,31 @@ async def mark_error(store: Store, episode_id: str, stage: str, exc: BaseExcepti
         )
 
 
+#: Stage names under which a transcript failure is recorded. The stage writes
+#: "transcript" itself; the runner and the archive walk wrap the same stage and
+#: label their exceptions with their own name, so all three have to be listed or
+#: a cleared error would depend on which loop happened to run the episode.
+TRANSCRIPT_STAGES: frozenset[str] = frozenset({"transcript", "backfill_transcript"})
+
+
+def clear_error(doc: Doc, stages: frozenset[str]) -> None:
+    """Drop a recorded failure once the stage that recorded it has succeeded.
+
+    ``last_error`` is what the console shows as the episode's current problem,
+    so leaving it behind after the stage went on to work turns a transient
+    failure into a permanent red line. Thirteen episodes carried "no transcript
+    from any strategy" under a summary written *from their transcript* — the
+    first attempt failed, a later one succeeded, and nothing erased the note.
+
+    Scoped to the stage that just succeeded rather than blanket-cleared: a
+    Tier-1 failure is still news on an episode that has since acquired a
+    transcript, and the two are independent.
+    """
+    error = doc.get("last_error")
+    if isinstance(error, dict) and error.get("stage") in stages:
+        doc["last_error"] = None
+
+
 def bump_attempt(doc: Doc, key: str) -> int:
     """Increment and return an attempt counter on the doc (in place)."""
     attempts = doc.setdefault("attempts", {})

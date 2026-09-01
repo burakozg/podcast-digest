@@ -355,6 +355,54 @@ def test_a_finished_archive_episode_is_not_labelled_queued() -> None:
 
 
 @pytest.mark.skipif(NODE is None, reason="node is not available to run JavaScript")
+def test_a_summary_is_not_captioned_with_a_failure_it_survived() -> None:
+    """`last_error` is never cleared by anything but a manual retry.
+
+    So a description-only summary — the designed outcome when no transcript can
+    be had — carried a red "Last error: no transcript from any strategy" under
+    it forever, duplicating the "description only" basis line and reading as a
+    broken episode. 36 published episodes rendered that way.
+    """
+    script = inline_script(STATIC / "episodes.html")
+    start = script.index("function errorIsHistory")
+    end = script.index("function whyNoSummary")
+    harness = (
+        script[start:end]
+        + """
+        const cases = [
+          // The shape that alarmed: published, summarised from the description
+          // because the transcript could not be had.
+          [{ status: "PUBLISHED" }, "a summary"],
+          // Genuinely stuck: the stage failed and nothing was produced.
+          [{ status: "TRANSCRIPT_FAILED" }, ""],
+          // An unexpected failure stays red even with a summary on the doc.
+          [{ status: "ERROR" }, "a summary"],
+          // Queued, nothing yet.
+          [{ status: "AWAITING_TRANSCRIPT" }, undefined],
+        ];
+        console.log(JSON.stringify(cases.map(([e, s]) => errorIsHistory(e, s))));
+        """
+    )
+    scratch = Path(__import__("tempfile").mkdtemp()) / "notice.js"
+    scratch.write_text(harness, encoding="utf-8")
+    result = subprocess.run([str(NODE), str(scratch)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr[-400:]
+    past = json.loads(result.stdout)
+
+    assert past[0] is True, "an episode with a summary got past whatever it hit"
+    assert past[1] is False, "nothing was produced — this one really is stuck"
+    assert past[2] is False, "ERROR is an unexplained failure, not a designed outcome"
+    assert past[3] is False
+
+
+def test_the_red_error_line_is_conditional() -> None:
+    """Guards the call site: the helper is useless if the render ignores it."""
+    page = (STATIC / "episodes.html").read_text(encoding="utf-8")
+    assert "errorIsHistory(e, t1.summary_md)" in page
+    assert "Last error" in page and "Earlier failure" in page
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not available to run JavaScript")
 def test_opening_an_episode_does_not_reference_a_missing_variable() -> None:
     """`node --check` proves a page parses, not that it runs.
 

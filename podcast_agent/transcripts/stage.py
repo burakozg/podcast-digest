@@ -12,7 +12,7 @@ from typing import Final
 
 from ..config import Settings
 from ..db import Doc, Store, save_transcript
-from ..episodes import attempt_count, bump_attempt, transition
+from ..episodes import TRANSCRIPT_STAGES, attempt_count, bump_attempt, clear_error, transition
 from ..logging_setup import get_logger
 from ..state import EpisodeStatus
 from ..utils import iso_now
@@ -96,6 +96,10 @@ class TranscriptStage:
         def _apply(doc: Doc) -> None:
             _release(doc)
             bump_attempt(doc, "transcript")
+            # The stage just succeeded, so whatever it recorded last time is
+            # history. Left behind, it is displayed under the finished summary
+            # as though the episode were still broken.
+            clear_error(doc, TRANSCRIPT_STAGES)
             doc["transcript_source"] = result.source
             doc["transcript_chars"] = len(result.text)
             doc["transcript_bytes_gz"] = size
