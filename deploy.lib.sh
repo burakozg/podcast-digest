@@ -154,6 +154,64 @@ nas_get() {
 # nas_exists <remote> — true if the path exists at all (file, dir, anything).
 nas_exists() { nas_ssh "[ -e '$1' ]" 2>/dev/null; }
 
+# nas_sqlite_get <container> <db-path-inside-container> <local>
+#
+# A consistent copy of a LIVE SQLite database. Use this, never nas_get, for
+# anything a running container is writing to.
+#
+# `nas_get` (and the plain `ssh cat` this whole library exists to standardise)
+# is wrong for SQLite in WAL mode, which is the default for every database
+# here: committed transactions live in a `-wal` sidecar until a checkpoint
+# folds them into the `.db`. Copy the `.db` on its own and you get a file that
+# opens cleanly, passes `PRAGMA integrity_check`, and is **silently missing
+# recent writes**. There is no error, no short read, and no empty file for
+# nas_get's non-empty check to catch — which is precisely the class of failure
+# that check was added for.
+#
+# The work happens inside the container because it cannot happen anywhere
+# else: this NAS has neither `sqlite3` nor any `python` on the host (checked
+# 2026-08-28), so nothing on the host can checkpoint or snapshot a database.
+# The application images have python, and SQLite's online backup API takes a
+# consistent snapshot *while the application keeps writing* — no stop, no
+# downtime, no lock held for the duration of the copy.
+#
+# Verified against vault-ask's 62 MB index with the service live: integrity ok,
+# full row counts, no interruption.
+nas_sqlite_get() {
+  local container="$1" db="$2" out="$3" tmp want got
+  tmp="/tmp/.nas_sqlite_get.$$.db"
+
+  # Script over stdin rather than `python3 -c '...'`: the one-liner needs
+  # quotes of its own, and nesting those through ssh -> docker exec -> sh is
+  # how quoting bugs get written. `-i` is what lets stdin reach python.
+  nas_ssh "${NAS_DOCKER_ENV} '${NAS_DOCKER_BIN}' exec -i '${container}' python3 - '${db}' '${tmp}'" <<'PY' \
+    || die "nas_sqlite_get: snapshot failed inside '${container}'. No python3 in that image, or ${db} is not readable there."
+import sqlite3, sys
+# mode=ro: a reader must never create or migrate the database it is copying.
+src = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
+dst = sqlite3.connect(sys.argv[2])
+src.backup(dst)
+dst.close()
+src.close()
+PY
+
+  # The redirect MUST be inside sh -c. `docker exec <c> wc -c < /path` resolves
+  # the redirect in the *host* shell, so it reports "No such file" for a file
+  # that is present and correct inside the container.
+  want="$(nas_ssh "${NAS_DOCKER_ENV} '${NAS_DOCKER_BIN}' exec '${container}' sh -c 'wc -c < \"${tmp}\"'" | tr -d '[:space:]')"
+  nas_ssh "${NAS_DOCKER_ENV} '${NAS_DOCKER_BIN}' exec '${container}' cat '${tmp}'" > "$out" \
+    || { nas_ssh "${NAS_DOCKER_ENV} '${NAS_DOCKER_BIN}' exec '${container}' rm -f '${tmp}'" >/dev/null 2>&1
+         die "nas_sqlite_get: could not read the snapshot back out of '${container}'."; }
+  nas_ssh "${NAS_DOCKER_ENV} '${NAS_DOCKER_BIN}' exec '${container}' rm -f '${tmp}'" >/dev/null 2>&1 || true
+
+  # Same byte-count contract as nas_put, for the same reason: a truncated
+  # transfer that exits 0 is the failure worth catching.
+  got="$(wc -c < "$out" | tr -d '[:space:]')"
+  [ -s "$out" ] || die "nas_sqlite_get: ${out} came back empty — refusing to treat that as a backup."
+  [ "$want" = "$got" ] \
+    || die "nas_sqlite_get: ${out} is truncated (${want} bytes there, ${got} here)."
+}
+
 # nas_put_tree <remote-dir> <dir>...
 #
 # COPYFILE_DISABLE / --no-mac-metadata / --no-xattrs: macOS otherwise larks
