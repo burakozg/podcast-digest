@@ -42,6 +42,7 @@ def build_scheduler(
     signals: Callable[[], Awaitable[Any]] | None = None,
     narrate: Callable[[], Awaitable[Any]] | None = None,
     entities: Callable[[], Awaitable[Any]] | None = None,
+    video_digest: Callable[[], Awaitable[Any]] | None = None,
 ) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(
         timezone=settings.scheduler.timezone,
@@ -75,6 +76,13 @@ def build_scheduler(
         # last time somebody called the endpoint by hand, and a stale timeline
         # reads exactly like an accurate one.
         jobs.append(("entity_notes", settings.scheduler.entities_cron, entities))
+    if video_digest is not None:
+        # Mirrors a sibling service's summaries in as read-only episodes
+        # (ingest/video_digest.py). Its own cron, not the ingest one: this
+        # polls a LAN neighbour rather than public feeds, nothing it writes
+        # enters the pipeline, and a failure here must not look like a feed
+        # ingest failure.
+        jobs.append(("video_digest_import", settings.video_digest.poll_cron, video_digest))
     if search is not None:
         # Without this the index is only ever as current as the last manual
         # rebuild, which is the failure mode nobody notices: search quietly

@@ -28,6 +28,7 @@ from .db import ConflictError, Doc, NotFoundError, Store, typed_sort, update_doc
 from .logging_setup import get_logger
 from .notes import ENTITIES_DIR, KEY_PREFIX, wrap
 from .sanitize import md_escape_inline, slugify
+from .state import OURS_ONLY
 from .utils import iso, iso_now, utcnow
 
 log = get_logger(__name__)
@@ -146,7 +147,12 @@ async def aggregate(
     Reads only episodes that carry a Tier-1 block: entities come from that pass,
     and an episode triage rejected never had one.
     """
-    selector: dict[str, Any] = {"type": "episode"}
+    # OURS_ONLY: an imported episode's entities belong to the application
+    # that summarised it, which writes its own topic pages. Counting them
+    # here would add lines to shared `99 topics/` notes for content this
+    # app does not own, and move the min_mentions threshold that decides
+    # whether a topic note exists at all.
+    selector: dict[str, Any] = {"type": "episode", **OURS_ONLY}
     if since:
         selector["published_at"] = {"$gte": since}
 

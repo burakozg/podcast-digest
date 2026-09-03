@@ -97,6 +97,20 @@
   #drawer[hidden] { display: none; }
   #drawer h3 { margin: .2rem 0 .3rem; font-size: 1.05rem; line-height: 1.35; }
   #drawer .summary { white-space: pre-wrap; margin-top: .8rem; }
+  /* Rendered Markdown brings its own block elements, so pre-wrap would keep
+     the newlines *between* them and double every gap. */
+  #drawer .summary.rendered { white-space: normal; }
+  #drawer .summary.rendered > :first-child { margin-top: 0; }
+  #drawer .summary.rendered > :last-child { margin-bottom: 0; }
+  #drawer .summary.rendered h1,
+  #drawer .summary.rendered h2,
+  #drawer .summary.rendered h3 { font-size: 1rem; margin: 1rem 0 .35rem; }
+  #drawer .summary.rendered p { margin: .55rem 0; }
+  #drawer .summary.rendered ul,
+  #drawer .summary.rendered ol { margin: .55rem 0; padding-left: 1.3rem; }
+  #drawer .summary.rendered li { margin: .2rem 0; }
+  #drawer .summary.rendered code { font-size: .92em; }
+  #drawer .summary.rendered pre { overflow-x: auto; }
   #drawer ul { margin: .4rem 0 0; padding-left: 1.1rem; }
   .closebar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
   input[type=password] {
@@ -162,6 +176,7 @@
         <option>TRANSCRIPT_FAILED</option><option>READY_FOR_DIGEST</option>
         <option>DIGEST_DIRECT</option><option>SCORED_LOW</option>
         <option>DROPPED</option><option>PUBLISHED</option><option>ERROR</option>
+        <option>IMPORTED</option>
       </select>
       <!-- Bands rather than a floor, so the low end is reachable: "what did
            triage reject?" is as real a question as "what is worth reading?" -->
@@ -261,6 +276,12 @@
           <tr><td><span class="pill bad">ERROR</span></td>
               <td>Something failed; the traceback is on the episode</td>
               <td>Open it and retry — it resumes where it failed</td></tr>
+          <tr><td><span class="pill">IMPORTED</span></td>
+              <td>A video summary mirrored in from video-digest, for reading
+                  here. It was never triaged, transcribed or scored — the
+                  summary arrived already written</td>
+              <td>Nothing. It stays out of digests and out of the vault, which
+                  already has its note. Read and star it like any other</td></tr>
         </tbody>
       </table>
     </div>
@@ -577,7 +598,13 @@
         html += `<div class="row"><span>Score</span><span>${esc(t1.relevance_score)}/10 · ` +
                 `${esc(String(t1.summary_basis || "").replace(/_/g, " "))}</span></div>`;
         if (t1.why_it_matters) html += `<p style="margin-top:.8rem"><strong>Why it matters:</strong> ${esc(t1.why_it_matters)}</p>`;
-        html += `<div class="summary">${esc(t1.summary_md)}</div>`;
+        // summary_html is rendered and allowlist-filtered server-side by
+        // sanitize.md_to_safe_html — never esc()'d here, or the markup would
+        // show as literal tags. Falls back to the escaped Markdown for a doc
+        // written before the server started sending it.
+        html += t1.summary_html
+          ? `<div class="summary rendered">${t1.summary_html}</div>`
+          : `<div class="summary">${esc(t1.summary_md)}</div>`;
         if ((t1.key_takeaways || []).length) {
           html += `<p style="margin:.9rem 0 0"><strong>Key takeaways</strong></p><ul>` +
                   t1.key_takeaways.map((b) => `<li>${esc(b)}</li>`).join("") + `</ul>`;

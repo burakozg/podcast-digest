@@ -23,6 +23,18 @@ NUMERIC = re.compile(
 #: requiring esc() here would demand escaping HTML into visible tag soup.
 FRAGMENT_NAME = re.compile(r"^[A-Za-z_$][\w$]*$")
 
+#: A field the *server* rendered to HTML and filtered against an allowlist —
+#: today only `tier1.summary_html`, from `sanitize.md_to_safe_html`. It is raw
+#: on purpose: escaping it here would show the markup as literal tags.
+#:
+#: The `_html` suffix is the contract, not a description. A field may only be
+#: named this way if the value is sanitised server-side before it is serialised;
+#: `test_sanitize.TestMarkdownRenderedForTheConsole` is where that end holds up.
+#: Adding the suffix to an unsanitised field silently buys an XSS, so this rule
+#: is deliberately narrow — a bare `.map()`, `.join()` or `String()` around one
+#: is still reported.
+SERVER_RENDERED = re.compile(r"^[\w$.\[\]]*\b\w+_html$")
+
 _STRING = re.compile(r"'[^'\\]*'|\"[^\"\\]*\"")
 
 
@@ -168,6 +180,9 @@ def is_escaped(expr: str, *, local_functions: frozenset[str] = frozenset()) -> b
         return True
     if FRAGMENT_NAME.match(expr):
         # A local name holding markup this page built; scanned in its own right.
+        return True
+    if SERVER_RENDERED.match(expr):
+        # Sanitised server-side; see the constant for what the suffix promises.
         return True
     call = re.match(r"^([A-Za-z_$][\w$]*)\s*\(", expr)
     if call and call.group(1) in local_functions:

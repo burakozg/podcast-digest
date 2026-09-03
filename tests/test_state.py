@@ -18,9 +18,24 @@ from podcast_agent.state import (
 S = EpisodeStatus
 
 
-def test_every_status_has_a_transition_entry() -> None:
+#: Statuses reached by importing rather than by the pipeline. They are absent
+#: from `ALLOWED_TRANSITIONS` on purpose — `.get(current, frozenset())` makes
+#: them terminal, so anything that tries to move one raises instead of quietly
+#: pulling an imported episode into a pipeline that has nothing to do for it.
+TERMINAL_BY_DESIGN = frozenset({S.IMPORTED})
+
+
+def test_every_pipeline_status_has_a_transition_entry() -> None:
     """A status missing from the map would raise on any transition out of it."""
-    assert set(ALLOWED_TRANSITIONS) == set(EpisodeStatus)
+    assert set(ALLOWED_TRANSITIONS) == set(EpisodeStatus) - TERMINAL_BY_DESIGN
+
+
+@pytest.mark.parametrize("status", sorted(TERMINAL_BY_DESIGN, key=lambda s: s.value))
+def test_a_terminal_status_refuses_every_transition(status: S) -> None:
+    """The exemption above is a design property, so it is asserted, not assumed."""
+    for target in EpisodeStatus:
+        with pytest.raises(IllegalTransition):
+            assert_transition(status, target)
 
 
 def test_happy_path_full_pipeline() -> None:

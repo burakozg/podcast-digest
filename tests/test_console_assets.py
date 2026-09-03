@@ -233,9 +233,27 @@ class TestValuesReachTheMarkupEscaped:
     The audit that established this baseline found the pages already escaping
     consistently; the rule is here so that stays true. What it enforces is that
     every value interpolated into markup is escaped, URL-encoded, coerced to a
-    number, or is markup this page built itself — the last case being scanned in
-    its own right, so nothing gets in unexamined.
+    number, is markup this page built itself — scanned in its own right — or is
+    a `*_html` field the server already rendered and allowlist-filtered.
     """
+
+    @pytest.mark.parametrize(
+        "expr",
+        [
+            "t1.summary_md",
+            "ep.title",
+            "String(t1.summary_html)",
+            "t1.summary_htmlish",
+        ],
+    )
+    def test_the_server_rendered_exemption_stays_narrow(self, expr: str) -> None:
+        """`_html` exempts the field itself, nothing built around it.
+
+        The suffix promises the *server* sanitised that value. Anything wrapping
+        or reshaping it in the browser is a different value again, and a near
+        miss on the name must not inherit the promise.
+        """
+        assert not is_escaped(expr)
 
     def test_every_page_interpolates_escaped_values_only(self) -> None:
         offenders: list[str] = []

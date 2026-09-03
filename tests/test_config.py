@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -397,6 +398,58 @@ class TestDotEnvSharedWithCompose:
         settings = build(tmp_path, admin_api_key=DROP)
         assert settings.admin_api_key is not None
         assert settings.admin_api_key.get_secret_value() == "abc123"
+
+    #: Documented in `.env.example` but forwarded by neither compose file, so
+    #: setting one on the NAS does nothing at all. Found by the check below
+    #: after `video_digest` shipped inert for exactly this reason. Listed rather
+    #: than fixed because each is a live deployment setting whose empty-string
+    #: default needs its own thought — an unset var here overrides config.yaml
+    #: with "", which is not the same as leaving the value alone.
+    KNOWN_NOT_FORWARDED = frozenset(
+        {
+            "PODAGENT_ASR__MODEL",
+            "PODAGENT_LOGGING__LEVEL",
+            "PODAGENT_NTFY_TOKEN",
+            "PODAGENT_PIPELINE__DIGEST_THRESHOLD",
+        }
+    )
+
+    def test_every_documented_prefixed_var_is_forwarded_by_compose(self) -> None:
+        """`.env` is not handed to the container — compose forwards an allowlist.
+
+        A `PODAGENT_*` variable documented in `.env.example` but named in
+        neither compose file is inert on the NAS, and silently so: the app boots
+        normally and behaves as though the setting were never written. That is
+        how `video_digest` deployed switched off, from a correctly filled .env,
+        with nothing in any log saying why.
+        """
+        root = Path(__file__).parent.parent
+        documented = set(
+            re.findall(r"^#?\s*(PODAGENT_[A-Z0-9_]+)=", (root / ".env.example").read_text(), re.M)
+        )
+        forwarded: set[str] = set()
+        for name in ("docker-compose.yml", "docker-compose.nas.yml"):
+            forwarded |= set(
+                re.findall(r"^\s+(PODAGENT_[A-Z0-9_]+):", (root / name).read_text(), re.M)
+            )
+
+        assert documented, "no PODAGENT_ vars found in .env.example — the regex has rotted"
+        missing = documented - forwarded - self.KNOWN_NOT_FORWARDED
+        assert not missing, (
+            "documented in .env.example but never reaches the container: "
+            f"{sorted(missing)} — add them to a compose file's environment: block"
+        )
+
+    def test_the_not_forwarded_list_does_not_outlive_its_entries(self) -> None:
+        """An exemption that has been fixed must be deleted, not left standing."""
+        root = Path(__file__).parent.parent
+        forwarded: set[str] = set()
+        for name in ("docker-compose.yml", "docker-compose.nas.yml"):
+            forwarded |= set(
+                re.findall(r"^\s+(PODAGENT_[A-Z0-9_]+):", (root / name).read_text(), re.M)
+            )
+        stale = self.KNOWN_NOT_FORWARDED & forwarded
+        assert not stale, f"now forwarded; remove from KNOWN_NOT_FORWARDED: {sorted(stale)}"
 
     def test_compose_only_vars_are_ignored(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

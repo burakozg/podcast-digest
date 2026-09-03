@@ -279,6 +279,40 @@ deliberately never transcribed. That is the choice that stops anything
 possibly-relevant from vanishing without also paying to transcribe it. Those rows
 read `no — indexed only (grey zone)`.
 
+### Reading video summaries here
+
+A sibling service, **video-digest**, summarises YouTube videos and writes its
+own notes into the same Obsidian vault. The vault is a fine place to keep those
+notes and a poor place to *work through* them: nothing there tracks what you
+have already read. This console does — so the summaries are mirrored in as
+episodes of a synthetic podcast, **Video Digest**, and read, starred and
+searched like anything else.
+
+Mirrored, not adopted. An imported episode carries `origin: imported` and the
+status `IMPORTED`, and on both axes it is invisible to everything that acts:
+
+- it is **never transcribed, scored or re-summarised** — the summary arrived
+  already written, and `IMPORTED` has no transition out of it, so a stage that
+  reached for one raises rather than quietly starting work;
+- it **never enters a weekly digest**, and so is never narrated;
+- **nothing here writes it to the vault** — not an episode note, not a topic
+  mention. video-digest already wrote that note, and a second copy is exactly
+  what this design exists to avoid. Each summary lives in the vault once.
+
+**Your marks are yours.** A re-import refreshes the title and the summary and
+never touches `read_at`, `starred` or your feedback — otherwise the next hourly
+poll would quietly mark everything unread again.
+
+Configure it under `video_digest:` with `PODAGENT_VIDEO_DIGEST_API_KEY` in
+`.env`; leave it disabled and no job is registered at all. It polls hourly, and
+
+```bash
+curl -fsS -X POST -H "X-API-Key: $KEY" "http://$HOST/api/v1/runs/video-digest" | jq
+```
+
+pulls now. That returns 409 rather than a cheerful zero when the integration is
+not configured — an unconfigured run and an empty one otherwise look identical.
+
 ---
 
 ## Configuration
@@ -802,6 +836,7 @@ calling it twice does not repeat a mark.
 | `POST /api/v1/runs/backfill` | Walk the archive (`?dry_run=true` by default, `?confirm=true` to spend) |
 | `POST /api/v1/runs/rescore` | Re-score against the current interest profile (`?limit=`, `?force=`) |
 | `POST /api/v1/runs/retention` | Run retention cleanup now |
+| `POST /api/v1/runs/video-digest` | Pull video-digest's summaries now (409 when not configured) |
 | `GET/POST /api/v1/backfill/control` | Read, start or pause the archive walk |
 | `GET /api/v1/episodes` | Paged list (`?status=`, `?podcast=`, `?starred=`, `?unread=`, `?flagged=`, score bounds) |
 | `GET /api/v1/episodes/{id}` | One episode in full, including summary and traceback |
@@ -859,6 +894,7 @@ on every interface.
 | `retention_cleanup` | daily 04:00 |
 | `backfill` | every 20 min — **a no-op unless the archive walk is started** |
 | `search_sync` | twice hourly (:15, :45) — incremental, no-op when nothing changed |
+| `video_digest_import` | hourly (:17) — **not registered unless `video_digest` is configured** |
 
 Each job is `max_instances=1` + `coalesce=True`, and manual triggers take the
 same lock, so a slow run never overlaps the next firing.

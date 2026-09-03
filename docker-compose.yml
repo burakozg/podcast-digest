@@ -62,6 +62,14 @@ services:
       PODAGENT_VAULT__DB: ${VAULT_DB:-vault}
       PODAGENT_VAULT__USER: ${VAULT_USER:-podagent}
       PODAGENT_VAULT_COUCHDB_PASSWORD: ${VAULT_COUCHDB_PASSWORD:-}
+      # Mirror in video-digest's summaries so they can be read here. Read-only:
+      # nothing imported is transcribed, scored, digested or written to the
+      # vault. Inert by default — unset leaves the job unregistered entirely.
+      # Passed under their own names (like the two LLM keys above) because that
+      # is what .env.example and DEPLOY-NAS.md document.
+      PODAGENT_VIDEO_DIGEST__ENABLED: ${PODAGENT_VIDEO_DIGEST__ENABLED:-false}
+      PODAGENT_VIDEO_DIGEST__BASE_URL: ${PODAGENT_VIDEO_DIGEST__BASE_URL:-}
+      PODAGENT_VIDEO_DIGEST_API_KEY: ${PODAGENT_VIDEO_DIGEST_API_KEY:-}
       # Threads are capped so ASR cannot starve the rest of the NAS.
       OMP_NUM_THREADS: "4"
     volumes:

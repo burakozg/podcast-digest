@@ -36,6 +36,13 @@ class EpisodeStatus(StrEnum):
     PUBLISHED = "PUBLISHED"
     #: Unexpected failure; traceback stored on the doc for inspection.
     ERROR = "ERROR"
+    #: Mirrored from a sibling service, already summarised elsewhere. Never
+    #: produced by this pipeline and never transitions out (no
+    #: ALLOWED_TRANSITIONS entry), so it is inert by construction rather
+    #: than by every selector remembering to exclude it: absent from
+    #: ACTIVE_STATUSES, DIGESTABLE_STATUSES and the SURFACED/ELIGIBLE sets
+    #: that drive ranking. See ingest/video_digest.py.
+    IMPORTED = "IMPORTED"
 
 
 #: The two values of `episode.origin`: routine polling, or the archive walk.
@@ -44,6 +51,9 @@ class EpisodeStatus(StrEnum):
 #: made the other import it, which is a cycle.
 BACKFILL_ORIGIN = "backfill"
 ROUTINE_ORIGIN = "routine"
+#: Mirrored in from a sibling service (ingest/video_digest.py). Neither
+#: polled nor summarised here; this app is only a reader for it.
+IMPORTED_ORIGIN = "imported"
 
 #: Mango clause selecting everything that is *not* archive material.
 #:
@@ -56,6 +66,13 @@ ROUTINE_ORIGIN = "routine"
 #: pipeline query scanned a range and filtered in memory. Writing `origin` on
 #: every episode — see `migrate.backfill_origins` — buys the honest spelling.
 ROUTINE_ONLY: dict[str, object] = {"origin": ROUTINE_ORIGIN}
+
+#: Everything this app produced itself — routine polling or the archive
+#: walk — and so everything it may publish to the vault. Imported episodes
+#: are excluded: their source application already wrote its own note, and a
+#: second copy from here is the duplication this exists to prevent. `$in`
+#: rather than `$ne` for the reason ROUTINE_ONLY documents above.
+OURS_ONLY: dict[str, object] = {"origin": {"$in": [ROUTINE_ORIGIN, BACKFILL_ORIGIN]}}
 
 
 S = EpisodeStatus

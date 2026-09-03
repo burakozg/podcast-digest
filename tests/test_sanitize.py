@@ -9,6 +9,7 @@ from podcast_agent.sanitize import (
     html_to_text,
     md_escape_inline,
     md_escape_table_cell,
+    md_to_safe_html,
     safe_url,
     sanitize_bullet,
     sanitize_md_block,
@@ -176,3 +177,40 @@ class TestLlmOutputIsSanitizedAtValidation:
             Tier1Result(relevance_score=11)
         with pytest.raises(ValueError):
             Tier1Result(relevance_score=-1)
+
+
+class TestMarkdownRenderedForTheConsole:
+    """The drawer injects this as HTML, so a summary is an injection vector.
+
+    Summaries reach it from two directions — LLM output downstream of podcast
+    descriptions and transcripts, and now video-digest's imported prose — and
+    both are attacker-influenced at a remove.
+    """
+
+    def test_markdown_becomes_html(self) -> None:
+        assert "<strong>prose</strong>" in md_to_safe_html("Some **prose**.")
+
+    def test_a_script_tag_in_the_source_is_inert_text(self) -> None:
+        """Escaped, not deleted. `html=False` renders raw HTML as visible text,
+        so the payload is still readable in the drawer but no tag is ever
+        opened for the browser to run."""
+        rendered = md_to_safe_html("Before\n\n<script>steal(document.cookie)</script>\n\nAfter")
+        assert "<script" not in rendered
+        assert "&lt;script&gt;" in rendered
+        assert "Before" in rendered and "After" in rendered
+
+    def test_an_event_handler_never_becomes_an_attribute(self) -> None:
+        rendered = md_to_safe_html('<img src=x onerror="alert(1)">')
+        assert "<img" not in rendered
+        assert 'onerror="' not in rendered
+
+    def test_a_javascript_url_never_becomes_a_link(self) -> None:
+        """markdown-it refuses the protocol, so the source stays literal text
+        rather than rendering an anchor the reader could click."""
+        rendered = md_to_safe_html("[click](javascript:alert(1))")
+        assert "<a " not in rendered
+        assert "href" not in rendered
+
+    def test_empty_input_is_empty_output(self) -> None:
+        assert md_to_safe_html(None) == ""
+        assert md_to_safe_html("") == ""

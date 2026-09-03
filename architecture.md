@@ -70,6 +70,11 @@ the cost guardrails.
 
 Archive backfill runs the same stages with different economics — see §7.
 
+Imported episodes enter none of it. `origin: "imported"` and the terminal
+`IMPORTED` status put them outside every selector above, so they are never
+triaged, transcribed, summarised, scored, digested or narrated — the summary
+arrived already written. See §4.
+
 ### Stage ownership
 
 | Stage | Module | Reads | Writes |
@@ -111,8 +116,16 @@ negative ones. `{"origin": {"$ne": "backfill"}}` does not match a document with
 no `origin`, which is what a routine episode is. `MemoryStore` mirrors this
 exactly, distinguishing absent from present-and-null, because the in-memory
 store comparing `None != "backfill"` in Python is what let this selector pass
-every test and match nothing in production. Excluding archive material goes
-through `backfill.NOT_BACKFILL`, which carries the `$exists: false` arm.
+every test and match nothing in production.
+
+The fix is that `origin` is **mandatory** and every selector matches it
+positively: `state.ROUTINE_ONLY` (`origin: "routine"`) for the pipeline and the
+weekly digest, and `state.OURS_ONLY` (`origin: {"$in": ["routine",
+"backfill"]}`) for the two vault writers, which want archive material but not
+imports. `$in` rather than `$ne` for the same reason — a negative match is a
+question about a field that might not be there. `migrate.backfill_origins`
+stamps an origin onto any episode lacking one at startup, which is what keeps
+"mandatory" true for documents written before the field existed.
 → `test_store.py::TestMangoSubset::test_ne_does_not_match_a_missing_field`,
   `test_backfill.py::TestRoutineEpisodesAreFoundAtAll`
 
@@ -193,7 +206,7 @@ Single CouchDB database, documents discriminated by `type`.
 | Type | Id | Holds |
 |---|---|---|
 | `podcast` | `podcast:<slug>` | Poll state (etag, failures), feed `description`, console `overrides`, backfill cursor |
-| `episode` | `episode:<sha256>` | Metadata, `tier0`, `tier1`, status, transcript attachment |
+| `episode` | `episode:<sha256>` | Metadata, `origin`, `tier0`, `tier1`, status, transcript attachment |
 | `digest` | `digest:<YYYY-Www>` | Weekly digest: period, file path, episode ids, `marking_complete` |
 | `archive` | `archive:<slug>:<YYYY-MM>` | Archive month: same, per podcast-month |
 | `llm_call` | `llmcall:<uuid>` | One row per LLM invocation: tokens, latency, cost, fallback |
@@ -203,6 +216,21 @@ Single CouchDB database, documents discriminated by `type`.
 | `control` | `control:backfill` | Whether the unattended archive walk is paused |
 | `control` | `control:settings` | Console-edited configuration overlay (§6b) |
 | `control` | `control:lock:<job>` | Cross-process job lease: holder host/pid, expiry, heartbeat |
+
+Every episode carries an `origin`, which is what decides who may act on it:
+`routine` (polled from a feed), `backfill` (reached by the archive walk, §7) or
+`imported`. An **imported** episode is a summary mirrored in from a sibling
+service — today `video-digest`, over its authenticated `GET /videos` export,
+polled hourly by `ingest/video_digest.py`. This application is only the
+*reader* for those: it re-summarises nothing, and deliberately writes nothing
+about them to the vault, because video-digest has already written its own note
+there and a second copy is indistinguishable from a real one. They carry
+`source_app` and `source_note_path` saying where they came from, no `tier0`
+(it would skew backfill's escalation ratio), no `transcript_at` (retention keys
+off it) and no `feedback` key at all (`signals.collect` selects
+`{"$exists": true}`, which a null would match). A re-import refreshes the
+content fields only — `read_at`, `starred` and `feedback` are the reader's, and
+losing them on the next poll would be the feature working against itself.
 
 Episodes additionally carry reader signals written by the console: `starred`,
 `read_at` (a timestamp, not a flag) and a `feedback` block recording an explicit
@@ -568,7 +596,8 @@ podcast_agent/
   notify.py        exceptional-item push
   logstore.py      kept warnings in CouchDB; logbuffer.py is the live tail
   db/              Store protocol, CouchDB client, in-memory double
-  ingest/          RSS polling, idempotent episode creation
+  ingest/          RSS polling, idempotent episode creation; video_digest.py
+                   mirrors a sibling service's summaries in, read-only
   triage/          tier0.py (the call) + routing.py (the decision)
   transcripts/     acquire, normalize, asr, stage
   summarize/       tier1.py + chunking.py (map-reduce)

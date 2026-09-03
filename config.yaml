@@ -389,6 +389,14 @@ logging:
   level: INFO
   format: json                # json | console
 
+# Mirroring video-digest's summaries in as read-only episodes, for reading in
+# this console. Address and key are environment-only (see .env.example);
+# `enabled` there is what turns it on. Nothing imported is summarised, scored,
+# digested or written to the vault — see podcast_agent/ingest/video_digest.py.
+video_digest:
+  poll_cron: "17 * * * *"
+  timeout_s: 30.0
+
 retention:
   # 0 keeps transcripts indefinitely. They are the corpus: entity timelines and
   # any retrieval over the archive reach back exactly as far as the transcripts

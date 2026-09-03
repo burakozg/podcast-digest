@@ -140,6 +140,15 @@ TTS_URL=http://transcriber.local:8880
 # VAULT_COUCHDB_URL=http://couchdb.local:5984
 # VAULT_DB=yourvault
 # VAULT_COUCHDB_PASSWORD=
+
+# Optional: mirror in video-digest's summaries so they can be read, starred and
+# searched from this console. Read-only -- nothing imported is transcribed,
+# scored, digested, narrated, or written to the vault, which already has
+# video-digest's own note for each one. The key is video-digest's admin key.
+# Unset leaves the job unregistered entirely, costing nothing.
+# PODAGENT_VIDEO_DIGEST__ENABLED=true
+# PODAGENT_VIDEO_DIGEST__BASE_URL=http://video-digest.local:8090
+# PODAGENT_VIDEO_DIGEST_API_KEY=
 EOF
 
 ssh -p $P $NAS "grep -c '^[A-Z]' $APP/.env"     # expect 12 assignments

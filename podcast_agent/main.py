@@ -35,6 +35,7 @@ from .digest.generate import DigestGenerator
 from .digest.narrate import DigestNarrator
 from .entities import aggregate, digest_weeks, rank, write_entity_notes
 from .ingest.feeds import Ingestor
+from .ingest.video_digest import VideoDigestImporter
 from .joblock import reclaim_local_leases
 from .llm import build_llm_client
 from .logging_setup import configure_logging, get_logger
@@ -320,6 +321,25 @@ def build_app(settings: Settings, *, store: Store | None = None, llm: Any = None
             """
             return await runner.narrate_digest()
 
+        video_importer = VideoDigestImporter(active_settings, app.state.store)
+
+        async def import_video_digest() -> dict[str, Any]:
+            """Mirror in a sibling service's summaries so they can be read
+            here. Read-only: nothing it writes enters the pipeline, the
+            digest, or the vault — see ingest/video_digest.py."""
+            stats = await video_importer.run()
+            return {
+                "fetched": stats.fetched,
+                "created": stats.created,
+                "updated": stats.updated,
+            }
+
+        # Exposed for `POST /runs/video-digest`, so the mirror can be pulled on
+        # demand rather than only on its cron — the same affordance every other
+        # job has.
+        app.state.video_digest_import = import_video_digest
+        app.state.video_digest_configured = video_importer.configured()
+
         scheduler = build_scheduler(
             active_settings,
             runner,
@@ -333,6 +353,9 @@ def build_app(settings: Settings, *, store: Store | None = None, llm: Any = None
             # Not registered at all when text-to-speech is off, so a disabled
             # feature costs no wakeups.
             narrate=narrate_newest if active_settings.tts.enabled else None,
+            # Not registered unless configured, so an unconfigured integration
+            # costs no wakeups and cannot log a failure every hour.
+            video_digest=import_video_digest if video_importer.configured() else None,
         )
         scheduler.start()
         app.state.scheduler = scheduler

@@ -32,6 +32,7 @@ from ..entities import EPISODE_NAMES_DOC_ID, pin_note_names
 from ..logging_setup import get_logger
 from ..notes import EPISODES_DIR
 from ..sanitize import slugify
+from ..state import OURS_ONLY
 from .generate import BASIS_LABELS, _build_env, summary_view
 
 log = get_logger(__name__)
@@ -159,7 +160,12 @@ async def summarised_episodes(store: Store, *, limit_docs: int = 20_000) -> list
     skip = 0
     while skip < limit_docs:
         page = await store.find(
-            {"type": "episode"},
+            # OURS_ONLY, not a bare type match: an imported episode
+            # (ingest/video_digest.py) carries a summary its own application
+            # already wrote into the vault, and a note from here would be the
+            # same summary a second time. `_prune` below owns this folder
+            # outright, so an import must never appear in it even once.
+            {"type": "episode", **OURS_ONLY},
             sort=typed_sort("published_at", "desc"),
             limit=BATCH,
             skip=skip,

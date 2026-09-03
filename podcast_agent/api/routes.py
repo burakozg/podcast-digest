@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections import defaultdict
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
@@ -49,7 +50,7 @@ from ..logging_setup import get_logger
 from ..pipeline.runner import JobBusy, PipelineRunner, pending_routine_episodes
 from ..podcasts import PodcastRegistry
 from ..retention import RetentionJob
-from ..sanitize import safe_url
+from ..sanitize import md_to_safe_html, safe_url
 from ..search import FIELDS as SEARCH_FIELDS
 from ..search import SearchIndex, SearchUnavailable
 from ..signals import export_new_marks
@@ -580,6 +581,23 @@ async def run_retention(request: Request) -> dict[str, Any]:
     return {"job": "retention", "result": await retention.run()}
 
 
+@api_router.post("/runs/video-digest", summary="Pull video-digest's summaries now")
+async def run_video_digest_import(request: Request) -> dict[str, Any]:
+    """A 409 rather than a silent no-op when the integration is off.
+
+    An unconfigured import returns zero of everything, which is exactly what a
+    working import over an empty export returns — so reporting success here
+    would make a missing API key look like "nothing new".
+    """
+    if not getattr(request.app.state, "video_digest_configured", False):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="video_digest is not configured (needs enabled, base_url and an API key)",
+        )
+    job: Callable[[], Awaitable[dict[str, Any]]] = request.app.state.video_digest_import
+    return {"job": "video_digest_import", "result": await job()}
+
+
 # --- episodes ---------------------------------------------------------------
 
 #: Fields returned by the episode endpoints. Excludes transcripts by construction.
@@ -676,6 +694,17 @@ def _episode_view(doc: dict[str, Any], *, verbose: bool = False) -> dict[str, An
         # Includes summary_md, key_takeaways and entities — the actual reading
         # material, which the list view deliberately omits for size.
         view["tier1_full"] = tier1 or None
+        if tier1 and tier1.get("summary_md"):
+            # Rendered here rather than in the page: summaries are Markdown
+            # (the console showed its literal syntax before this), and they
+            # derive from LLM output over third-party descriptions and
+            # transcripts. `md_to_safe_html` renders with html=False *and*
+            # filters against an allowlist, so neither a raw tag in the source
+            # nor a gap in one defence alone reaches the drawer.
+            view["tier1_full"] = {
+                **tier1,
+                "summary_html": md_to_safe_html(str(tier1["summary_md"])),
+            }
     return view
 
 

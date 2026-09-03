@@ -374,6 +374,30 @@ class ASRConfig(StrictModel):
         return self
 
 
+class VideoDigestConfig(StrictModel):
+    """Mirroring video-digest's summaries in as read-only episodes (§5).
+
+    This app is only a *reader* for them: nothing is summarised, scored,
+    digested or written to the vault from these — see
+    `ingest/video_digest.py`. Deployment topology, so the address lives in
+    the environment (PODAGENT_VIDEO_DIGEST__BASE_URL), never in YAML.
+    """
+
+    enabled: bool = False
+    base_url: str | None = None
+    #: How often to poll. The exporter is a sibling on the LAN and its
+    #: content changes a few times a day at most.
+    poll_cron: str = "17 * * * *"
+    timeout_s: float = Field(default=30.0, ge=1.0, le=300.0)
+
+    @field_validator("base_url")
+    @classmethod
+    def _check_url(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        return _require_http_url(value)
+
+
 class TTSConfig(StrictModel):
     """Reading the weekly digest aloud (§5).
 
@@ -688,6 +712,7 @@ class Settings(BaseSettings):
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     notifications: NotificationConfig = Field(default_factory=NotificationConfig)
     content: ContentConfig = Field(default_factory=ContentConfig)
+    video_digest: VideoDigestConfig = Field(default_factory=VideoDigestConfig)
 
     # --- Secrets: environment only, never YAML, never logged (§8) -----------
     admin_api_key: SecretStr | None = None
@@ -696,6 +721,9 @@ class Settings(BaseSettings):
     #: Credentials for the *vault's* CouchDB (see VaultConfig) — a different
     #: database, owned by a different application, so a different secret.
     vault_couchdb_password: SecretStr | None = None
+    #: video-digest's admin key — its export is header-authenticated, so
+    #: this is a credential for *its* API, not one of ours.
+    video_digest_api_key: SecretStr | None = None
     openrouter_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
 
