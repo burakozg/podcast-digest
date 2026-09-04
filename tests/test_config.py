@@ -399,57 +399,38 @@ class TestDotEnvSharedWithCompose:
         assert settings.admin_api_key is not None
         assert settings.admin_api_key.get_secret_value() == "abc123"
 
-    #: Documented in `.env.example` but forwarded by neither compose file, so
-    #: setting one on the NAS does nothing at all. Found by the check below
-    #: after `video_digest` shipped inert for exactly this reason. Listed rather
-    #: than fixed because each is a live deployment setting whose empty-string
-    #: default needs its own thought — an unset var here overrides config.yaml
-    #: with "", which is not the same as leaving the value alone.
-    KNOWN_NOT_FORWARDED = frozenset(
-        {
-            "PODAGENT_ASR__MODEL",
-            "PODAGENT_LOGGING__LEVEL",
-            "PODAGENT_NTFY_TOKEN",
-            "PODAGENT_PIPELINE__DIGEST_THRESHOLD",
-        }
-    )
+    def test_every_documented_prefixed_var_reaches_the_container(self) -> None:
+        """`.env` must actually be handed to the container.
 
-    def test_every_documented_prefixed_var_is_forwarded_by_compose(self) -> None:
-        """`.env` is not handed to the container — compose forwards an allowlist.
+        It is, via `env_file:` — but that is one line in a compose file and
+        deleting it breaks nothing visibly: the app boots fine and every setting
+        written in .env is simply ignored, with nothing in any log saying why.
+        That is how the video-digest import first deployed switched off, and how
+        four documented variables had never worked at all.
 
-        A `PODAGENT_*` variable documented in `.env.example` but named in
-        neither compose file is inert on the NAS, and silently so: the app boots
-        normally and behaves as though the setting were never written. That is
-        how `video_digest` deployed switched off, from a correctly filled .env,
-        with nothing in any log saying why.
+        So the check is on the mechanism, not on a list of names: either the
+        service passes the whole file, or every documented variable is named
+        explicitly.
         """
         root = Path(__file__).parent.parent
         documented = set(
             re.findall(r"^#?\s*(PODAGENT_[A-Z0-9_]+)=", (root / ".env.example").read_text(), re.M)
         )
-        forwarded: set[str] = set()
-        for name in ("docker-compose.yml", "docker-compose.nas.yml"):
-            forwarded |= set(
-                re.findall(r"^\s+(PODAGENT_[A-Z0-9_]+):", (root / name).read_text(), re.M)
-            )
-
         assert documented, "no PODAGENT_ vars found in .env.example — the regex has rotted"
-        missing = documented - forwarded - self.KNOWN_NOT_FORWARDED
-        assert not missing, (
-            "documented in .env.example but never reaches the container: "
-            f"{sorted(missing)} — add them to a compose file's environment: block"
-        )
 
-    def test_the_not_forwarded_list_does_not_outlive_its_entries(self) -> None:
-        """An exemption that has been fixed must be deleted, not left standing."""
-        root = Path(__file__).parent.parent
         forwarded: set[str] = set()
+        passes_whole_file = False
         for name in ("docker-compose.yml", "docker-compose.nas.yml"):
-            forwarded |= set(
-                re.findall(r"^\s+(PODAGENT_[A-Z0-9_]+):", (root / name).read_text(), re.M)
-            )
-        stale = self.KNOWN_NOT_FORWARDED & forwarded
-        assert not stale, f"now forwarded; remove from KNOWN_NOT_FORWARDED: {sorted(stale)}"
+            text = (root / name).read_text()
+            forwarded |= set(re.findall(r"^\s+(PODAGENT_[A-Z0-9_]+):", text, re.M))
+            if re.search(r"^\s*env_file:", text, re.M):
+                passes_whole_file = True
+
+        missing = documented - forwarded
+        assert passes_whole_file or not missing, (
+            "documented in .env.example but never reaches the container: "
+            f"{sorted(missing)} — add them, or restore `env_file:` on the service"
+        )
 
     def test_compose_only_vars_are_ignored(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

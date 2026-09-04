@@ -187,9 +187,15 @@ def is_escaped(expr: str, *, local_functions: frozenset[str] = frozenset()) -> b
     call = re.match(r"^([A-Za-z_$][\w$]*)\s*\(", expr)
     if call and call.group(1) in local_functions:
         return True
-    # `xs.map(x => `<li>…`).join("")` — a list of fragments. The literals it is
-    # built from were scanned; the chain itself introduces no value.
-    if ".map(" in expr and ".join(" in expr:
+    # `xs.map(x => `<li>${esc(x)}</li>`).join("")` — a list of fragments. The
+    # literals it is built from were scanned on their own, so the chain adds
+    # nothing unexamined.
+    #
+    # The backtick is the whole basis of that argument and is therefore
+    # required. Without one there is no nested literal, nothing was scanned,
+    # and `rows.map(r => r.title).join("")` would otherwise be waved straight
+    # into innerHTML — which is the exact hazard this module exists to catch.
+    if ".map(" in expr and ".join(" in expr and "`" in expr:
         return True
     # A conditional whose branches are all string literals decides between two
     # fixed pieces of text — the condition never reaches the page.

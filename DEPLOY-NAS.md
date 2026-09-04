@@ -109,11 +109,16 @@ AGENT_BIND=127.0.0.1:8080
 # file, no separate config. Pick a free address on your qnet subnet.
 APP_LAN_IP=10.0.0.2
 
-# Memory here is tight and shared. large-v3-turbo wants ~2GB resident plus a
-# 1.6GB first-run download; small.en is a fraction of that. Set as an env
-# override rather than editing config.yaml, so the deployed config.yaml stays
-# byte-identical to the repo's.
-PODAGENT_ASR__MODEL=small.en
+# PODAGENT_ASR__MODEL is deliberately NOT set here. It once was, to shrink the
+# local whisper footprint on this memory-tight NAS — but ASR runs remotely now
+# and this value is sent verbatim to that server as the model id, where a bare
+# "small.en" is not a valid name. The remote model belongs in the console's ASR
+# override (`asr.model`), which is where it is set.
+#
+# It was inert for a long time — the compose file passed an allowlist that never
+# included it — so this only started to matter once `env_file:` began forwarding
+# the whole file. Worth knowing if you add an env override here: it takes effect
+# over the console's stored settings, not under them.
 
 # The machine that transcribes. This NAS manages a realtime factor of 0.11 --
 # ten hours of CPU for a 68-minute episode -- so ASR is pushed to a box that

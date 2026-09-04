@@ -37,6 +37,20 @@ services:
     depends_on:
       couchdb-podcast:
         condition: service_healthy
+    # Everything in .env reaches the container, so a PODAGENT_* variable written
+    # there works without also being listed below. The allowlist that used to be
+    # the only path silently dropped anything not named in it: the app booted
+    # normally with the setting simply absent, and nothing in any log said why.
+    # That is how the video-digest import first deployed switched off, and four
+    # documented variables (ASR__MODEL, LOGGING__LEVEL, NTFY_TOKEN,
+    # PIPELINE__DIGEST_THRESHOLD) had never worked at all.
+    #
+    # `environment:` still wins over `env_file:`, so the mappings below — where
+    # .env uses a short name and the app wants a prefixed one — are unaffected.
+    # Unprefixed variables in .env are ignored by pydantic-settings, which only
+    # reads PODAGENT_*.
+    env_file:
+      - .env
     environment:
       PODAGENT_CONFIG_FILE: /config/config.yaml
       PODAGENT_ADMIN_API_KEY: ${PODAGENT_ADMIN_API_KEY:?set PODAGENT_ADMIN_API_KEY in .env}

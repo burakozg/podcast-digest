@@ -243,6 +243,7 @@ class TestValuesReachTheMarkupEscaped:
             "t1.summary_md",
             "ep.title",
             "String(t1.summary_html)",
+            "items.map((h) => h.summary_html).join('')",
             "t1.summary_htmlish",
         ],
     )
@@ -254,6 +255,26 @@ class TestValuesReachTheMarkupEscaped:
         miss on the name must not inherit the promise.
         """
         assert not is_escaped(expr)
+
+    @pytest.mark.parametrize(
+        ("expr", "escaped"),
+        [
+            # The case the exemption exists for: a nested literal, scanned itself.
+            ("xs.map((x) => `<li>${esc(x)}</li>`).join('')", True),
+            # No nested literal, so nothing was ever scanned — this is a value
+            # going straight into innerHTML.
+            ("rows.map((r) => r.title).join('')", False),
+            ("rows.map((r) => r.title).join('') + other", False),
+        ],
+    )
+    def test_a_map_join_chain_is_only_exempt_when_it_builds_literals(
+        self, expr: str, escaped: bool
+    ) -> None:
+        """`.map().join()` was exempt on the grounds that the fragments it joins
+        are template literals reported on their own. That holds only when there
+        *is* a literal; without one the chain smuggles a raw value past the
+        check, which is the single thing this scanner exists to prevent."""
+        assert is_escaped(expr) is escaped
 
     def test_every_page_interpolates_escaped_values_only(self) -> None:
         offenders: list[str] = []
