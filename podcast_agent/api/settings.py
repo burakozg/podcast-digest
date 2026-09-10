@@ -154,8 +154,14 @@ async def read_settings(request: Request) -> dict[str, Any]:
             key: getattr(settings.backfill, key) for key in sorted(OVERRIDABLE_BACKFILL_KEYS)
         },
         # Fixed here rather than in the browser: these protect the machine.
+        # `max_audio_minutes` and `remote_chunk_minutes` protect the *other*
+        # machine — the ASR host, whose memory scales with how much audio it is
+        # asked to hold at once — but they are caps just the same, so they keep
+        # the caps' rule: config.yaml only.
         "asr_fixed": {
             "max_audio_mb": settings.asr.max_audio_mb,
+            "max_audio_minutes": settings.asr.max_audio_minutes,
+            "remote_chunk_minutes": settings.asr.remote_chunk_minutes,
             "asr_concurrency": settings.asr.asr_concurrency,
             "download_concurrency": settings.asr.download_concurrency,
             "remote_url": settings.asr.remote_url,

@@ -25,6 +25,7 @@ a delay.
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,6 +57,99 @@ class ASRResult:
 
 class ASRUnavailable(Exception):
     """The backend cannot run at all (missing dependency, unreachable endpoint)."""
+
+
+#: What Whisper resamples to anyway, so encoding chunks straight to it costs no
+#: fidelity and makes their size predictable: ~1.9 MB per minute of audio.
+CHUNK_SAMPLE_RATE = 16000
+
+
+async def _run(*args: str, timeout_s: float) -> tuple[int, bytes, bytes]:
+    """Run a subprocess to completion, killing it if it overruns."""
+    proc = await asyncio.create_subprocess_exec(
+        *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise
+    return proc.returncode or 0, out, err
+
+
+async def probe_duration_s(audio_path: Path, *, timeout_s: float = 120.0) -> float | None:
+    """Runtime of an audio file per ffprobe, or None if it cannot be determined.
+
+    None rather than an exception on every failure: the only decision resting on
+    this is whether a file is long enough to be worth splitting, and "we could
+    not tell" should fall back to the plain single request rather than fail an
+    episode outright.
+    """
+    try:
+        code, out, err = await _run(
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=nw=1:nk=1",
+            str(audio_path),
+            timeout_s=timeout_s,
+        )
+    except (OSError, TimeoutError) as exc:
+        log.warning("asr.probe_failed", path=str(audio_path), error=str(exc))
+        return None
+    if code != 0:
+        log.warning("asr.probe_failed", path=str(audio_path), stderr=err.decode()[:200])
+        return None
+    try:
+        return float(out.decode().strip())
+    except ValueError:
+        return None
+
+
+async def split_audio(
+    audio_path: Path, dest: Path, *, chunk_seconds: int, timeout_s: float
+) -> list[Path]:
+    """Split ``audio_path`` into ``chunk_seconds`` pieces of 16 kHz mono WAV.
+
+    Re-encoded rather than stream-copied: a copy can only cut on a container
+    frame boundary, which for a VBR MP3 drifts from the requested length, and
+    the pieces keep the source's sample rate and channel count so each one is
+    larger than it needs to be. ffmpeg streams the decode, so doing it this way
+    costs bounded memory here as well as on the server.
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    pattern = str(dest / "chunk_%04d.wav")
+    code, _out, err = await _run(
+        "ffmpeg",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-i",
+        str(audio_path),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        str(CHUNK_SAMPLE_RATE),
+        "-c:a",
+        "pcm_s16le",
+        "-f",
+        "segment",
+        "-segment_time",
+        str(chunk_seconds),
+        pattern,
+        timeout_s=timeout_s,
+    )
+    if code != 0:
+        raise ASRUnavailable(f"ffmpeg could not split {audio_path.name}: {err.decode()[:300]}")
+    chunks = sorted(dest.glob("chunk_*.wav"))
+    if not chunks:
+        raise ASRUnavailable(f"ffmpeg produced no chunks for {audio_path.name}")
+    return chunks
 
 
 class ASRBackend(Protocol):
@@ -212,10 +306,8 @@ class RemoteASRBackend:
     def name(self) -> str:
         return f"remote:{self._base}"
 
-    async def transcribe(self, audio_path: Path, *, language: str | None = None) -> ASRResult:
-        if not self._base:
-            raise ASRUnavailable("asr.remote_url is not set")
-
+    async def _post(self, audio_path: Path, language: str | None) -> dict[str, Any]:
+        """One transcription request, with every failure translated (see above)."""
         url = f"{self._base}/v1/audio/transcriptions"
         data: dict[str, str] = {
             "model": self._cfg.model,
@@ -227,7 +319,6 @@ class RemoteASRBackend:
         if language:
             data["language"] = language
 
-        started = time.monotonic()
         try:
             # The file is passed as a handle, not bytes: episodes run to
             # hundreds of megabytes and httpx streams from disk this way. This
@@ -245,8 +336,6 @@ class RemoteASRBackend:
         except OSError as exc:
             raise ASRUnavailable(f"could not read {audio_path}: {exc}") from exc
 
-        elapsed = time.monotonic() - started
-
         if response.status_code >= 400:
             body = response.text[:300]
             raise ASRUnavailable(f"{self.name} returned HTTP {response.status_code}: {body}")
@@ -256,10 +345,36 @@ class RemoteASRBackend:
         except ValueError as exc:
             raise ASRUnavailable(f"{self.name} returned non-JSON: {response.text[:200]}") from exc
 
-        text = (payload or {}).get("text")
-        if not isinstance(text, str):
+        # `isinstance` on the payload as well as the field: a server answering
+        # 200 with a JSON list or a bare string would otherwise reach `.get` and
+        # raise AttributeError, which is precisely the escape this class exists
+        # to prevent.
+        if not isinstance(payload, dict) or not isinstance(payload.get("text"), str):
             raise ASRUnavailable(f"{self.name} returned no text field: {str(payload)[:200]}")
+        return payload
 
+    async def transcribe(self, audio_path: Path, *, language: str | None = None) -> ASRResult:
+        if not self._base:
+            raise ASRUnavailable("asr.remote_url is not set")
+
+        started = time.monotonic()
+        chunk_seconds = self._cfg.remote_chunk_minutes * 60
+        # Probed only when chunking is on, so the default path spawns no
+        # subprocess at all. An unknown duration falls through to the single
+        # request rather than failing — see `probe_duration_s`.
+        source_s = await probe_duration_s(audio_path) if chunk_seconds else None
+        if chunk_seconds and source_s and source_s > chunk_seconds:
+            return await self._transcribe_in_chunks(
+                audio_path,
+                language=language,
+                chunk_seconds=chunk_seconds,
+                source_s=source_s,
+                started=started,
+            )
+
+        payload = await self._post(audio_path, language)
+        elapsed = time.monotonic() - started
+        text = str(payload["text"])
         duration = payload.get("duration")
         log.info(
             "asr.complete",
@@ -272,6 +387,76 @@ class RemoteASRBackend:
             text=text,
             language=payload.get("language") or None,
             duration_s=int(duration) if isinstance(duration, int | float) else None,
+            elapsed_s=elapsed,
+        )
+
+    async def _transcribe_in_chunks(
+        self,
+        audio_path: Path,
+        *,
+        language: str | None,
+        chunk_seconds: int,
+        source_s: float,
+        started: float,
+    ) -> ASRResult:
+        """Transcribe a long episode as a sequence of bounded requests.
+
+        Sequential, not concurrent, and that is the whole point: the ceiling
+        being bought is the ASR host's memory for a *single* request, and firing
+        the chunks at once would put all of them back on it at the same time.
+
+        The chunks are written beside the audio — under the work directory,
+        which is already the quarantine for downloaded media — and removed on
+        the way out whatever happens, including a failure mid-episode.
+        """
+        with tempfile.TemporaryDirectory(prefix="asrchunk-", dir=audio_path.parent) as tmp:
+            chunks = await split_audio(
+                audio_path,
+                Path(tmp),
+                chunk_seconds=chunk_seconds,
+                timeout_s=self._cfg.remote_timeout_s,
+            )
+            log.info(
+                "asr.chunked",
+                backend=self.name,
+                audio_duration_s=int(source_s),
+                chunks=len(chunks),
+                chunk_minutes=self._cfg.remote_chunk_minutes,
+            )
+
+            parts: list[str] = []
+            language_seen: str | None = None
+            for index, chunk in enumerate(chunks, start=1):
+                payload = await self._post(chunk, language)
+                if text := str(payload["text"]).strip():
+                    parts.append(text)
+                language_seen = language_seen or (payload.get("language") or None)
+                log.info(
+                    "asr.chunk_complete",
+                    backend=self.name,
+                    chunk=index,
+                    of=len(chunks),
+                    chars=len(text),
+                    elapsed_s=round(time.monotonic() - started, 1),
+                )
+
+        elapsed = time.monotonic() - started
+        joined = " ".join(parts)
+        log.info(
+            "asr.complete",
+            backend=self.name,
+            model=self._cfg.model,
+            chars=len(joined),
+            elapsed_s=round(elapsed, 1),
+            chunks=len(chunks),
+            realtime_factor=round(source_s / elapsed, 2) if elapsed else None,
+        )
+        return ASRResult(
+            # The source's own runtime, not the sum of what the chunks reported:
+            # it is the one number measured before any splitting happened.
+            text=joined,
+            language=language_seen,
+            duration_s=int(source_s),
             elapsed_s=elapsed,
         )
 

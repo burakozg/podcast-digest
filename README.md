@@ -58,6 +58,10 @@ after each entry is what adopting it takes on a deployment already running.
        overwritten. See DEPLOY-NAS.md, "Redeploying after a code change".
      - Full history is git log. This list never claims completeness. -->
 
+- A long episode no longer stops the transcript queue: audio is sent to the
+  transcriber in 20-minute chunks, so its memory no longer scales with episode
+  length, and anything over four hours is summarised from its description
+  instead — *rebuild*
 - Each weekly digest entry is its "why it matters" and its takeaways, without
   the prose summary saying the same thing a third time; the full summary stays
   on the episode's own note — *rebuild*

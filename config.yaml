@@ -308,6 +308,32 @@ asr:
   language: en
   beam_size: 1
   max_audio_mb: 300
+  # Split anything longer than this into 20-minute requests, and skip anything
+  # longer than four hours outright. Both exist because of one failure, measured
+  # rather than guessed:
+  #
+  # An OpenAI audio endpoint holds the whole decoded file in memory for one
+  # request, and that cost tracks the audio's *runtime*, not its file size — so
+  # a well-compressed long episode sails past max_audio_mb and then asks the ASR
+  # host for gigabytes. Against speaches on an 8 GB host it came to ~55 MB of
+  # RSS per minute of audio: 40 minutes sat at 2.0 GB and finished, while a
+  # 127-minute episode reached 7.4 GB and the kernel killed the server
+  # mid-request (`anon-rss:7730472kB`, a *global* OOM — which is why
+  # `docker inspect` reported OOMKilled=false and ExitCode=0, and why this
+  # looked for days like an unreachable host rather than a crash).
+  #
+  # What made one bad episode expensive is the blast radius: a dead backend is
+  # reported as ASRUnavailable, the transcript stage treats that as an outage
+  # and defers *the whole stage*, and the queue is ordered newest-first — so one
+  # over-long episode at the head stopped every episode behind it, indefinitely,
+  # without ever spending its own retry budget.
+  #
+  # Chunking is the fix (peak memory becomes a function of chunk length, ~1.1 GB
+  # at 20 minutes, whatever the episode's length); the cap is the backstop for
+  # anything absurd enough to be worth skipping rather than transcribing.
+  # Remote only — the local backend streams segments and never holds the decode.
+  remote_chunk_minutes: 20
+  max_audio_minutes: 240
   keep_audio: false
   asr_concurrency: 1          # never more than 1 on the NAS
   download_concurrency: 2

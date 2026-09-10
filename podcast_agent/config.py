@@ -357,6 +357,18 @@ class ASRConfig(StrictModel):
     language: str | None = "en"
     beam_size: int = Field(default=1, ge=1, le=10)
     max_audio_mb: int = Field(default=300, ge=1, le=5000)
+    #: Skip ASR entirely for episodes declaring a longer runtime than this, and
+    #: let Tier-1 summarise from the description instead. 0 disables the cap.
+    #:
+    #: A *size* cap does not cover this. Transcription memory scales with audio
+    #: duration, not file size, so a well-compressed three-hour episode passes
+    #: `max_audio_mb` comfortably and then asks the ASR host for several GB.
+    #: Measured against speaches on an 8 GB host: ~55 MB of RSS per minute of
+    #: audio, so a 127-minute episode reached 7.4 GB and the kernel killed the
+    #: server mid-request. That is worse than not transcribing it, because the
+    #: backend dying is reported as an outage — which defers the whole
+    #: transcript stage, so every episode queued behind it stops too.
+    max_audio_minutes: int = Field(default=0, ge=0, le=1440)
     keep_audio: bool = False
     asr_concurrency: int = Field(default=1, ge=1, le=4)
     download_concurrency: int = Field(default=2, ge=1, le=8)
@@ -366,6 +378,20 @@ class ASRConfig(StrictModel):
     #: episode on the slowest machine that might answer. A 3-hour episode at 2x
     #: realtime is 90 minutes of silence on the socket.
     remote_timeout_s: int = Field(default=2700, ge=30, le=21600)
+    #: Split audio longer than this many minutes into chunks of this length and
+    #: transcribe them one at a time. 0 sends the whole file in one request.
+    #:
+    #: What this buys is a *constant* memory ceiling on the ASR host: an OpenAI
+    #: audio endpoint holds the decoded audio for one request, so peak usage
+    #: tracks the longest single request rather than the longest episode. At 20
+    #: minutes that is roughly a gigabyte no matter how long the show runs.
+    #: Remote only — the local backend streams segments internally and never
+    #: holds the whole decode.
+    #:
+    #: The cost is a seam every `remote_chunk_minutes`: Whisper loses context
+    #: across the boundary and a word spanning it can be garbled. At 20 minutes
+    #: that is five seams in a two-hour episode, against not transcribing it.
+    remote_chunk_minutes: int = Field(default=0, ge=0, le=240)
 
     @model_validator(mode="after")
     def _remote_needs_url(self) -> ASRConfig:

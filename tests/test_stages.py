@@ -275,6 +275,64 @@ class TestTranscriptAcquisition:
         assert asr.calls == []
 
     @respx.mock
+    async def test_an_episode_longer_than_the_duration_cap_is_skipped(
+        self, tmp_path: Path, store: MemoryStore
+    ) -> None:
+        """Transcription memory scales with runtime, not file size.
+
+        A well-compressed long episode passes `max_audio_mb` and then asks the
+        ASR host for several GB; measured, a 127-minute one reached 7.4 GB and
+        the kernel killed the server. That is reported as an outage, which
+        defers the whole transcript stage — so this cap protects the queue, not
+        just the episode.
+        """
+        settings = make_settings(tmp_path, asr={"max_audio_minutes": 120})
+        episode = make_episode(duration_s=7643)  # 127 minutes
+        asr = FakeASR(LONG_TEXT)
+        async with build_client() as client:
+            with pytest.raises(TranscriptUnavailable, match="127 min > cap 120 min"):
+                await build_acquirer(settings, store, client, asr).acquire(episode)
+        # Never downloaded either: the point is to spend neither the bandwidth
+        # nor the ASR host's memory on something already known to be too long.
+        assert asr.calls == []
+
+    @respx.mock
+    async def test_an_episode_within_the_duration_cap_still_transcribes(
+        self, tmp_path: Path, store: MemoryStore
+    ) -> None:
+        settings = make_settings(tmp_path, asr={"max_audio_minutes": 120})
+        respx.get("https://cdn-host.net/ep1.mp3").mock(
+            return_value=httpx.Response(
+                200, content=b"audio" * 1000, headers={"content-type": "audio/mpeg"}
+            )
+        )
+        asr = FakeASR(LONG_TEXT)
+        async with build_client() as client:
+            result = await build_acquirer(settings, store, client, asr).acquire(
+                make_episode(duration_s=45 * 60)
+            )
+        assert result.source == "asr"
+
+    @respx.mock
+    async def test_the_duration_cap_is_off_by_default(
+        self, tmp_path: Path, store: MemoryStore
+    ) -> None:
+        """Upgrading must not silently stop transcribing anything."""
+        settings = make_settings(tmp_path)
+        assert settings.asr.max_audio_minutes == 0
+        respx.get("https://cdn-host.net/ep1.mp3").mock(
+            return_value=httpx.Response(
+                200, content=b"audio" * 1000, headers={"content-type": "audio/mpeg"}
+            )
+        )
+        asr = FakeASR(LONG_TEXT)
+        async with build_client() as client:
+            result = await build_acquirer(settings, store, client, asr).acquire(
+                make_episode(duration_s=10 * 60 * 60)
+            )
+        assert result.source == "asr"
+
+    @respx.mock
     async def test_download_over_cap_is_aborted_midstream(
         self, tmp_path: Path, store: MemoryStore
     ) -> None:

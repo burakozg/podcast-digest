@@ -284,6 +284,19 @@ class TranscriptAcquirer:
             failures.append(f"ASR skipped: enclosure declares {declared} bytes > cap {max_bytes}")
             return None
 
+        # Checked before the download, not after: the point is to spend neither
+        # the bandwidth nor the ASR host's memory on an episode we already know
+        # is too long. See `ASRConfig.max_audio_minutes` for why a size cap does
+        # not cover this — the failure it prevents takes the whole stage down,
+        # not just this episode.
+        cap_minutes = self._settings.asr.max_audio_minutes
+        runtime = episode.get("duration_s")
+        if cap_minutes and isinstance(runtime, int | float) and runtime > cap_minutes * 60:
+            failures.append(
+                f"ASR skipped: episode runs {int(runtime) // 60} min > cap {cap_minutes} min"
+            )
+            return None
+
         audio_path = self._audio_path(episode)
         try:
             self._guard.check(enclosure, related_to=podcast.feed_url if podcast else None)
