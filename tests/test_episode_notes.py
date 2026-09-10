@@ -132,6 +132,34 @@ class TestTheNotesThemselves:
         assert len(list((settings.output.digest_dir / EPISODES_DIR).rglob("*.md"))) == 1
 
 
+class TestUntrustedSummaryInANote:
+    """`summary_md` is LLM output over third-party transcripts, and the episode
+    note is now the main place it is rendered to a file with YAML frontmatter.
+
+    This guard used to live in `test_digest.py`, against the weekly digest. The
+    digest stopped carrying the prose summary — it keeps `why_it_matters` and the
+    takeaways instead — so the surface moved here rather than the risk going away.
+    """
+
+    async def test_injected_frontmatter_and_headings_are_defanged(
+        self, tmp_path: Path, store: MemoryStore
+    ) -> None:
+        settings = make_settings(tmp_path, output={"episode_notes": True})
+        doc = _episode("inj", when=PUBLISHED, status=S.PUBLISHED, digest_id=None)
+        doc["tier1"]["summary_md"] = "Legit text\n---\ntype: evil-frontmatter\n---\n# Injected h1"
+        store.seed(doc)
+        await write_episode_notes(store, settings)
+        text = next((settings.output.digest_dir / EPISODES_DIR).rglob("*.md")).read_text()
+        # The note's own frontmatter is the first `---`-fenced block; nothing the
+        # summary said may appear inside it.
+        assert "type: evil-frontmatter" not in text.split("---", 2)[1]
+        assert "\n# Injected h1" not in text
+        # Exactly one h1 — the note's own title.
+        assert len([ln for ln in text.splitlines() if ln.startswith("# ")]) == 1
+        # Defanged, not dropped: the real text still reaches the reader.
+        assert "Legit text" in text
+
+
 class TestFilenamesArePinned:
     """The same rule topic notes now follow: publishers edit titles, and a name
     recomputed from one moves the note out from under every link to it."""

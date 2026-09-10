@@ -54,8 +54,11 @@ From {{ e.podcast_name | speech }}: {{ e.title | speech }}.
 Why it matters. {{ e.why_it_matters | speech }}
 
 {% endif %}
-{{ e.summary_md | speech }}
-
+{# `summary_md` is dropped here for the reason digest.md.j2 gives, and harder:
+   the paragraph and the bullets say the same thing, and a listener cannot skim
+   past the second telling the way a reader can. The spoken cue below stays
+   though -- on a page the bullets are visibly a list, and aloud nothing marks
+   the change of gear unless something says so. #}
 {% if e.key_takeaways %}
 Key takeaways.
 

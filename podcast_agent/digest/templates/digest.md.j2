@@ -69,12 +69,20 @@ Nothing new in this period.
 
 **Why it matters:** {{ e.why_it_matters }}
 
+{# No `summary_md` here, deliberately. Tier-1 writes three views of one episode
+   and they overlap heavily -- the prose summary and the takeaways carry the
+   same facts, once as a paragraph and once as bullets, and `why_it_matters`
+   frames those same facts as relevance. That is useful when reading a single
+   episode, where you take whichever view you want; in a weekly digest of a few
+   dozen it is the same thing said three times. So the digest keeps the two that
+   do different jobs -- why this one is for you, and what it actually said --
+   and the paragraph lives on in the places that show one episode at a time:
+   the episode note, the console drawer and `export.md.j2`.
+
+   Same shape as `also_relevant` below, which was already why + bullets; the
+   difference is only that a top pick keeps all of them rather than four. #}
 <!-- full -->
-{{ e.summary_md }}
-
 {% if e.key_takeaways %}
-**Key takeaways:**
-
 {% for bullet in e.key_takeaways %}
 - {{ bullet }}
 {% endfor %}

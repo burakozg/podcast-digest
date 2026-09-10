@@ -25,10 +25,6 @@ tags: [podcast-digest, cybersecurity]
 **Why it matters:** Directly relevant to your OT/ICS remit.
 
 <!-- full -->
-The hosts trace a **PLC** compromise at a water utility.
-
-**Key takeaways:**
-
 - Segment OT networks
 - Patch the HMI
 

@@ -58,6 +58,9 @@ after each entry is what adopting it takes on a deployment already running.
        overwritten. See DEPLOY-NAS.md, "Redeploying after a code change".
      - Full history is git log. This list never claims completeness. -->
 
+- Each weekly digest entry is its "why it matters" and its takeaways, without
+  the prose summary saying the same thing a third time; the full summary stays
+  on the episode's own note — *rebuild*
 - A finished summary is no longer captioned with a failure the episode got past
   ([`9d57417`](../../commit/9d57417)) — *rebuild*
 - The weekly digest, one note per episode and one per topic are written straight
@@ -72,12 +75,6 @@ after each entry is what adopting it takes on a deployment already running.
 - Summaries come from Qwen3.8 27B, with its thinking turned off so a truncated
   reply cannot burn the tier's retry budget ([`8a92715`](../../commit/8a92715))
   — *restart*
-- Export any episode as shareable Markdown, and have the weekly digest read
-  aloud into the vault ([`5ac431a`](../../commit/5ac431a)) — *rebuild, and
-  `TTS_URL` in the NAS `.env`*
-- Transcription can run on another machine over the OpenAI audio API, so the NAS
-  stops doing Whisper ([`738a788`](../../commit/738a788)) — *rebuild, and
-  `ASR_REMOTE_URL` in the NAS `.env`*
 - Initial release: ingestion, two-tier triage, ASR, weekly digest, consoles
   ([`56a8761`](../../commit/56a8761))
 

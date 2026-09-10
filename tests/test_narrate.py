@@ -213,11 +213,22 @@ class TestNarration:
                         "relevance_score": 9 if index == 0 else 5,
                         "summary_basis": "transcript",
                         "why_it_matters": f"Reason number {index} to care.",
-                        "summary_md": (
+                        "summary_md": f"Prose summary of week {index}, not for the ear.",
+                        # The Markdown lives in a takeaway rather than in
+                        # `summary_md`, because the spoken script no longer reads
+                        # the prose summary at all (see digest.speech.txt.j2) —
+                        # and what these tests are about is `| speech` stripping
+                        # what a synthesiser would otherwise pronounce. It has to
+                        # be a takeaway specifically: `summary_view` puts
+                        # `why_it_matters` through `md_escape_inline`, so its
+                        # Markdown arrives backslash-escaped and there is nothing
+                        # left for `| speech` to recognise.
+                        "key_takeaways": [
                             f"Affiliate churn hit **40%** in week {index}. "
-                            "Read [the report](https://example.com/report)."
-                        ),
-                        "key_takeaways": [f"Takeaway {index} alpha", f"Takeaway {index} beta"],
+                            "Read [the report](https://example.com/report).",
+                            f"Takeaway {index} alpha",
+                            f"Takeaway {index} beta",
+                        ],
                         "entities": ["LockBit"],
                         "matched_interests": [],
                     },
@@ -289,6 +300,10 @@ class TestNarration:
         assert "Takeaway 0 alpha" in script
         assert "They split on attribution." in script
 
+        # …but not the prose summary, which only restates the two above in a
+        # third wording. A reader can skim past that; a listener cannot.
+        assert "not for the ear" not in script
+
         # None of what a synthesiser would read as punctuation or spell out.
         assert "**" not in script
         assert "[[" not in script
@@ -315,8 +330,11 @@ class TestNarration:
         script = "\n\n".join(speech.calls)
         assert script.index("Top picks.") < script.index("Ransomware crews are hiring 0")
         assert script.index("Also relevant.") < script.index("Ransomware crews are hiring 1")
-        # Only the top pick gets its full summary read; the rest are takeaways.
-        assert "Affiliate churn hit 40% in week 1." not in script
+        # Both sections are why-it-matters plus takeaways now: the prose summary
+        # is read in neither, and what still separates them is only the
+        # four-takeaway cap on "also relevant".
+        assert "not for the ear" not in script
+        assert "Takeaway 1 alpha" in script
 
     async def test_the_note_gets_a_player(self, tmp_path: Path, store: MemoryStore) -> None:
         note = self._seed(store, tmp_path)

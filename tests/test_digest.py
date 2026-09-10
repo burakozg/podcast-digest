@@ -192,9 +192,18 @@ class TestUntrustedContentInOutput:
         # Exactly one h1 — the digest's own.
         assert len([ln for ln in text.splitlines() if ln.startswith("# ")]) == 1
 
-    async def test_injected_markdown_in_summary_is_defanged(
+    async def test_the_prose_summary_never_reaches_the_weekly_digest(
         self, settings, store: MemoryStore
     ) -> None:
+        """The weekly digest carries `why_it_matters` and the takeaways, not both
+        tellings of the same thing (see the comment in `digest.md.j2`).
+
+        Asserted here rather than only in the template because it is also the
+        strongest form of the injection guard this class exists for: text that is
+        never rendered cannot break the document it is not in. The defanging of
+        `summary_md` itself is tested where it *does* render — see
+        `test_episode_notes.TestUntrustedSummaryInANote`.
+        """
         store.seed(
             make_episode(
                 guid="inj",
@@ -204,13 +213,17 @@ class TestUntrustedContentInOutput:
                 tier1=tier1_block(
                     9,
                     summary_md="Legit text\n---\ntype: evil-frontmatter\n---\n# Injected h1",
+                    key_takeaways=["A bullet that does survive"],
                 ),
             )
         )
         text = (await run(settings, store)).file_path.read_text()  # type: ignore[union-attr]
-        assert "type: evil-frontmatter" not in text.split("---", 2)[1]  # not in frontmatter
+        assert "Legit text" not in text
+        assert "type: evil-frontmatter" not in text
         assert "\n# Injected h1" not in text
-        assert "Legit text" in text
+        # …while the two views the digest does keep are both present.
+        assert "**Why it matters:**" in text
+        assert "- A bullet that does survive" in text
 
     async def test_unsafe_link_is_dropped(self, settings, store: MemoryStore) -> None:
         store.seed(
