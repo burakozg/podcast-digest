@@ -99,11 +99,10 @@ docker compose up -d --build
 docker compose logs -f podcast-agent
 ```
 
-**Model providers.** As shipped, both tiers run in the cloud —
-OpenRouter as the primary with Anthropic behind it — because there is currently
-no machine here worth running a local model on. `PODAGENT_OPENROUTER_API_KEY`
-and `PODAGENT_ANTHROPIC_API_KEY` are therefore both required, and the service
-refuses to boot without them rather than failing over unauthenticated.
+**Model providers.** As shipped, both tiers run in the cloud, on
+OpenRouter, because there is currently no machine here worth running a local
+model on. `PODAGENT_OPENROUTER_API_KEY` is therefore required, and the service
+refuses to boot without it rather than failing over unauthenticated.
 
 To run locally instead, restore an Ollama primary in `config.yaml` (the blocks
 are still there, commented, in `llm.tiers`), pull the models, and the keys stop
@@ -643,10 +642,6 @@ llm:
           extra_body:
             reasoning:
               enabled: false
-      fallbacks:
-        - provider: anthropic        # a second vendor, not a second model
-          model: claude-sonnet-4-6
-          max_tokens: 2000
 ```
 
 Set `allow_cloud_fallback: false` and cloud endpoints are **removed from the
@@ -657,22 +652,17 @@ is enforced at construction, not merely at call time.
 both tiers are cloud end to end, so `false` would empty the chain — and the
 config refuses to load rather than leave a tier that can never run. Restoring
 the commented-out Ollama primary in `config.yaml` gives the switch its meaning
-back. Note also that the fallback is a *different vendor*: a second OpenRouter
-model does not survive OpenRouter itself being down or rejecting the key.
+back. A `fallbacks:` list is still supported per tier (another OpenRouter model,
+or a self-hosted endpoint) — the shipped config just doesn't use one, since
+OpenRouter is the only cloud vendor in play.
 
-Two constraints govern which Anthropic model can go in a chain, both from this
-codebase rather than the models: `temperature` is sent on every call, and the
-current Sonnet/Opus generation rejects a non-default value with a 400; and those
-models think by default, with thinking tokens counted against `max_tokens`, so a
-summary budget would be spent reasoning. Hence Haiku 4.5 and Sonnet 4.6.
-
-The second constraint applies to any hybrid thinking model, not just Anthropic's
-— which is why the Tier-1 primary above turns reasoning off explicitly. A
-truncated reply is scored as a *validation* failure, so leaving it on does not
-merely cost tokens: the tier burns both retries and falls through to the
-fallback, and you are billed twice for one summary. On OpenRouter the flag has to
-travel as `extra_body`; `reasoning_effort` is not in litellm's supported-parameter
-list for that provider and is dropped before the request is built.
+Every open-weight model on OpenRouter is a hybrid thinking model risk: left on,
+reasoning tokens are spent against `max_tokens`, the JSON arrives truncated, and
+that is scored as a *validation* failure — the tier burns both retries and the
+stage is deferred, billed for nothing usable. That is why the Tier-1 primary
+above turns reasoning off explicitly. On OpenRouter the flag has to travel as
+`extra_body`; `reasoning_effort` is not in litellm's supported-parameter list
+for that provider and is dropped before the request is built.
 
 Costs and latency per provider/model/tier are recorded for every call:
 
@@ -923,7 +913,7 @@ behind `llm.log_llm_io: true` at DEBUG only.
 |---|---|
 | `/api/v1/*` returns 503 "not configured" | `PODAGENT_ADMIN_API_KEY` unset. It fails closed on purpose |
 | Container exits with "FATAL: invalid configuration" | Read the listed field paths; `extra="forbid"` means a typo'd key is fatal by design |
-| `stages_deferred: ["triage"]` in a run summary | The tier's whole chain was unreachable — with the shipped cloud chain that means both OpenRouter and Anthropic failed (outage, bad key, no credit). Work stayed queued — nothing lost |
+| `stages_deferred: ["triage"]` in a run summary | The tier's whole chain was unreachable — with the shipped cloud chain that means OpenRouter failed (outage, bad key, no credit). Work stayed queued — nothing lost |
 | Episodes stuck in `AWAITING_TRANSCRIPT` | Check `max_transcripts_per_run` against arrival rate, and whether the podcast has `asr_enabled` |
 | Summaries say `description only` | That podcast has `asr_enabled: false` and publishes no transcript. Turn ASR on for it, or accept the label |
 | `ingest.url_rejected` in logs | Audio/transcript host isn't the feed's domain and isn't allowlisted → add it to `security.cdn_allowlist`. Run `scripts/check-enclosure-chains.py` to see every host each podcast's audio actually passes through — **each hop** must be allowlisted, not just the first |

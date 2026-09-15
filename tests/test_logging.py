@@ -231,12 +231,15 @@ class TestThirdPartyNoise:
 
     def test_taming_twice_does_not_stack_filters(self) -> None:
         """It is called from configure_logging and again after litellm imports."""
-        from podcast_agent.logging_setup import tame_litellm_logging
+        from podcast_agent.logging_setup import _drop_known_noise, tame_litellm_logging
 
         self._configure()
         tame_litellm_logging()
         tame_litellm_logging()
-        assert len(logging.getLogger("LiteLLM").filters) == 1
+        # Not a total-count check: litellm itself may attach its own filters
+        # (e.g. a stdout-truncation filter, added starting with litellm 1.100) —
+        # this only asserts our own filter isn't added a second time.
+        assert logging.getLogger("LiteLLM").filters.count(_drop_known_noise) == 1
 
 
 class TestCancelledJobsAreNotFailures:

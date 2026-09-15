@@ -5,8 +5,8 @@ state under one directory the NAS's own backup jobs can see.
 
 This replaces the native `uv run` setup in [RUNNING-ON-MAC.md](RUNNING-ON-MAC.md), which
 existed because Ollama needed Metal and a Linux container could not reach it. Model work
-is now cloud (OpenRouter primary, Anthropic fallback), so nothing about the workload
-requires the Mac.
+is now cloud (OpenRouter is the sole provider for every tier), so nothing about the
+workload requires the Mac.
 
 ```
                      ┌─────────────────────────────────────────┐
@@ -89,11 +89,9 @@ COUCHDB_USER=podagent
 COUCHDB_PASSWORD=<openssl rand -hex 24>
 PODAGENT_COUCHDB_PASSWORD=<same as COUCHDB_PASSWORD>
 
-# Both required: OpenRouter is primary for every tier, Anthropic the fallback.
-# The agent REFUSES TO BOOT if either is empty while that provider is in an
-# active chain — see the note below before deploying.
+# Required: OpenRouter is the primary provider for every tier. The agent
+# REFUSES TO BOOT if it is empty while that provider is in an active chain.
 PODAGENT_OPENROUTER_API_KEY=
-PODAGENT_ANTHROPIC_API_KEY=
 
 # Digests land inside the app directory, so one backup job captures everything.
 DIGEST_DIR=./digests
@@ -156,27 +154,22 @@ TTS_URL=http://transcriber.local:8880
 # PODAGENT_VIDEO_DIGEST_API_KEY=
 EOF
 
-ssh -p $P $NAS "grep -c '^[A-Z]' $APP/.env"     # expect 12 assignments
+ssh -p $P $NAS "grep -c '^[A-Z]' $APP/.env"     # expect 10 assignments
 ```
 
-> **You need an Anthropic API key before this will start.** `config.yaml` puts an
-> `anthropic` endpoint in both tiers' fallback chains, and an active endpoint whose key is
+> **You need an OpenRouter API key before this will start.** `config.yaml` puts an
+> `openrouter` endpoint in every tier's primary, and an active endpoint whose key is
 > unset is a hard startup failure, not a warning:
 >
 > ```
 > FATAL: invalid configuration
->   (root): Value error, an anthropic endpoint is active but
->   PODAGENT_ANTHROPIC_API_KEY is unset
+>   (root): Value error, an openrouter endpoint is active but
+>   PODAGENT_OPENROUTER_API_KEY is unset
 > ```
 >
 > That is the intended behaviour — failing closed beats failing over to an
-> unauthenticated provider. But it means "get an Anthropic key" is a prerequisite of this
+> unauthenticated provider. But it means "get an OpenRouter key" is a prerequisite of this
 > deployment, not a nice-to-have.
->
-> If you would rather not have one, delete the `fallbacks:` block from both tiers in
-> `config.yaml` before copying it up. Each tier keeps its OpenRouter primary and boots on
-> that key alone — which is exactly what the generated `config.local.yaml` does for
-> development.
 
 ---
 
@@ -416,7 +409,7 @@ curl -fsS -H "X-API-Key: $KEY" "http://$HOST/api/v1/settings" \
   | jq '{chains: (.tiers|map_values(.active_chain)), overrides: .overrides, asr: .asr.model}'
 ```
 
-Expect `openrouter/… → anthropic/…` per tier and `asr.model: "small.en"`.
+Expect `openrouter/…` per tier and `asr.model: "small.en"`.
 
 Step 4 should report **885 episodes**, the same as the Mac's index. A materially lower
 number means the restore dropped documents — investigate before doing anything else.
@@ -492,11 +485,11 @@ bad trade. The console reports when a restart is pending.
 | `exec format error` | Image built for the wrong architecture. `NAS_PLATFORM=linux/amd64`. |
 | Container exits with `FATAL: invalid configuration` | Read the field paths it lists. `extra="forbid"` means a typo'd key is fatal by design. |
 | `/api/v1/*` returns 503 | `PODAGENT_ADMIN_API_KEY` unset. It fails closed on purpose. |
-| Startup refuses: "an anthropic endpoint is active but …" | A provider key is missing from `.env`. Both are required as shipped. |
+| Startup refuses: "an openrouter endpoint is active but …" | `PODAGENT_OPENROUTER_API_KEY` is missing from `.env`. It is required as shipped. |
 | Console reachable from the NAS and LAN but not over a VPN | The container has its own LAN identity and uses the router as its gateway, so replies to a VPN subnet depend on the router having a route back. TCP connects, then no response. Use a LAN address, or reach it through the NAS. |
 | Console unreachable from everywhere | `ping 10.0.0.2` first. If that fails the qnet attach failed; if it answers, check the container logs. |
 | Permission denied writing digests/work | Bind-mount dirs owned by root because Docker created them. Remove, recreate as the SSH user, restart. |
-| `stages_deferred` in a run summary | The tier's whole chain was unreachable — both providers. Work stayed queued; nothing is lost. |
+| `stages_deferred` in a run summary | The tier's whole chain was unreachable — OpenRouter failed. Work stayed queued; nothing is lost. |
 | ASR killed mid-run | Memory. Check `free -m` against the other containers; `small.en` and `asr_concurrency: 1` are already the floor. |
 | Backup cron silent, no file | `.backup-env` unreadable, or crond not restarted after `crontab -e`. Check `backups/backup.log`. |
 

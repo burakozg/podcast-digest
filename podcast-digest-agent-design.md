@@ -278,7 +278,7 @@ State transitions must be enforced in one module (`state.py`) with an explicit a
 ## 7. LLM Abstraction Layer
 
 ### Requirements
-1. Every tier's model is selected purely by config: provider (`ollama` / `openrouter` / `anthropic`), model name, base URL, params.
+1. Every tier's model is selected purely by config: provider (`ollama` / `openrouter`), model name, base URL, params.
 2. Automatic fallback chain per tier (e.g., local first → OpenRouter on failure/timeout).
 3. All calls return Pydantic-validated structures with automatic retry-on-validation-failure.
 4. All calls emit an `llm_call` telemetry document.

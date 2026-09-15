@@ -38,11 +38,10 @@ class Priority(StrEnum):
 class Provider(StrEnum):
     OLLAMA = "ollama"
     OPENROUTER = "openrouter"
-    ANTHROPIC = "anthropic"
 
 
 #: Providers that send content off the LAN. Gated by ``allow_cloud_fallback``.
-CLOUD_PROVIDERS: frozenset[Provider] = frozenset({Provider.OPENROUTER, Provider.ANTHROPIC})
+CLOUD_PROVIDERS: frozenset[Provider] = frozenset({Provider.OPENROUTER})
 
 #: litellm route prefix per provider. Ollama maps to ``ollama_chat`` (the /api/chat
 #: endpoint) rather than ``ollama`` (/api/generate): the pipeline always sends
@@ -50,7 +49,6 @@ CLOUD_PROVIDERS: frozenset[Provider] = frozenset({Provider.OPENROUTER, Provider.
 LITELLM_PREFIX: dict[Provider, str] = {
     Provider.OLLAMA: "ollama_chat",
     Provider.OPENROUTER: "openrouter",
-    Provider.ANTHROPIC: "anthropic",
 }
 
 #: Used when an ollama endpoint omits api_base.
@@ -751,7 +749,6 @@ class Settings(BaseSettings):
     #: this is a credential for *its* API, not one of ours.
     video_digest_api_key: SecretStr | None = None
     openrouter_api_key: SecretStr | None = None
-    anthropic_api_key: SecretStr | None = None
 
     @classmethod
     def settings_customise_sources(
@@ -809,11 +806,6 @@ class Settings(BaseSettings):
                 "an openrouter endpoint is active but PODAGENT_OPENROUTER_API_KEY is unset "
                 "(set the key, or set allow_cloud_fallback: false for that tier)"
             )
-        if Provider.ANTHROPIC in needed and not self.anthropic_api_key:
-            raise ValueError(
-                "an anthropic endpoint is active but PODAGENT_ANTHROPIC_API_KEY is unset "
-                "(set the key, or set allow_cloud_fallback: false for that tier)"
-            )
         return self
 
     @model_validator(mode="after")
@@ -865,8 +857,6 @@ class Settings(BaseSettings):
             case Provider.OPENROUTER:
                 key = self.openrouter_api_key
                 return key.get_secret_value() if key else None
-            case Provider.ANTHROPIC:
-                return self.anthropic_api_key.get_secret_value() if self.anthropic_api_key else None
             case _:
                 return None
 

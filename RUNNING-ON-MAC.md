@@ -8,17 +8,16 @@ NAS deployment has to be backed out.
 `docker-compose.yml` still runs here unchanged (`docker compose config` parses;
 `docker compose up couchdb-podcast` is a fine way to rehearse it).
 
-    OpenRouter → Anthropic  ──┐   (model work, both tiers)
-                              ├──►  podcast-agent  (uv run, port 8080)
+    OpenRouter  ──┐   (model work, both tiers)
+                  ├──►  podcast-agent  (uv run, port 8080)
     CouchDB (single container)┘
 
 **Model work is cloud, here as on the NAS.** Ollama used to be the primary and
 the reason the agent ran natively at all — Metal is unreachable from a Linux
 container. Until there is a machine worth running a local model on, both tiers
-go to OpenRouter with Anthropic behind them, and `config.local.yaml` no longer
-rewrites the `llm` section: a local run that routed somewhere else would stop
-rehearsing the deployment. `.env` therefore needs
-`PODAGENT_OPENROUTER_API_KEY` and `PODAGENT_ANTHROPIC_API_KEY`.
+go to OpenRouter, and `config.local.yaml` no longer rewrites the `llm`
+section: a local run that routed somewhere else would stop rehearsing the
+deployment. `.env` therefore needs `PODAGENT_OPENROUTER_API_KEY`.
 
 The Ollama sections below are kept for when that machine exists; the models were
 verified working on an M2 / 16 GB.

@@ -201,12 +201,11 @@ llm:
   # false` keeps a tier fully on-prem — failures queue instead of leaving the LAN.
   #
   # INTERIM — no local model host. Until there is a machine worth running Ollama
-  # on, both tiers run OpenRouter primary with Anthropic behind it. Consequences
-  # worth knowing before editing this section:
+  # on, both tiers run OpenRouter as their sole provider. Consequences worth
+  # knowing before editing this section:
   #
-  #   * PODAGENT_OPENROUTER_API_KEY and PODAGENT_ANTHROPIC_API_KEY are both
-  #     REQUIRED now. Startup refuses to boot rather than run a tier whose
-  #     endpoints it cannot authenticate.
+  #   * PODAGENT_OPENROUTER_API_KEY is REQUIRED now. Startup refuses to boot
+  #     rather than run a tier whose endpoint it cannot authenticate.
   #   * `allow_cloud_fallback: false` on either tier would strip every endpoint
   #     out of the chain and fail validation at startup. That refusal is correct:
   #     with nothing on-prem there is no local-only mode to fall back to.
@@ -237,21 +236,8 @@ llm:
         model: meta-llama/llama-3.1-8b-instruct
         temperature: 0.0
         # Left unset, the provider's own default truncated replies mid-JSON:
-        # the call is billed, the answer is unusable, and the tier falls back.
+        # the call is billed and the answer is unusable.
         max_tokens: 900
-      fallbacks:
-        # Second vendor rather than a second model at the same one: what this
-        # protects against is OpenRouter itself being down or rejecting the key,
-        # which no OpenRouter model survives.
-        #
-        # Haiku 4.5 deliberately, not a current Sonnet/Opus: the pipeline sends
-        # `temperature` on every call, and Anthropic's newer models reject a
-        # non-default temperature with a 400 — a fallback that fails closed the
-        # first time it is ever needed. See the tier1 note.
-        - provider: anthropic
-          model: claude-haiku-4-5
-          temperature: 0.0
-          max_tokens: 900
     tier1:
       timeout_s: 300
       validation_retries: 2
@@ -271,9 +257,8 @@ llm:
         # Qwen3.8 is a hybrid thinking model and every OpenRouter provider for it
         # exposes reasoning_effort. Left on, reasoning tokens are spent against
         # the max_tokens above, the JSON arrives truncated, instructor scores that
-        # as a *validation* failure, and the tier burns both retries before
-        # falling through to Anthropic — billed twice for one summary. Exactly the
-        # shape of the Sonnet 5 problem described just below.
+        # as a *validation* failure, and the tier burns both retries before the
+        # stage is deferred — billed for nothing usable.
         #
         # It has to travel as `extra_body`: `reasoning_effort` is NOT in litellm's
         # supported-parameter list for openrouter, so spelling it that way is
@@ -284,21 +269,6 @@ llm:
           extra_body:
             reasoning:
               enabled: false
-      fallbacks:
-        # Sonnet 4.6 rather than Sonnet 5, for two reasons that are both about
-        # this codebase rather than the models:
-        #   * `temperature` is sent unconditionally (llm/client.py), and Sonnet 5
-        #     rejects a non-default value outright.
-        #   * Sonnet 5 thinks by default, and thinking tokens count against
-        #     max_tokens — a 2000-token budget would be spent reasoning and
-        #     return a truncated summary.
-        # Moving to Sonnet 5 means making temperature omittable, passing
-        # `thinking: {type: disabled}` through extra_params, and raising
-        # max_tokens. Worth doing on purpose, not as part of a fallback.
-        - provider: anthropic
-          model: claude-sonnet-4-6
-          temperature: 0.2
-          max_tokens: 2000
 
 asr:
   backend: local              # local | remote (remote is interface-only in v1)

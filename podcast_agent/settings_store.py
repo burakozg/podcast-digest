@@ -135,7 +135,6 @@ def validate_overrides(overrides: dict[str, Any]) -> None:
 _PROVIDER_DEFAULT_HOSTS: dict[Provider, str] = {
     Provider.OLLAMA: "localhost",
     Provider.OPENROUTER: "openrouter.ai",
-    Provider.ANTHROPIC: "api.anthropic.com",
 }
 
 #: Always permitted: the Ollama default, in the forms a person writes it.

@@ -248,16 +248,15 @@
   const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-  const PROVIDERS = ["ollama", "openrouter", "anthropic"];
-  const CLOUD_PROVIDERS = new Set(["openrouter", "anthropic"]);
+  const PROVIDERS = ["ollama", "openrouter"];
+  const CLOUD_PROVIDERS = new Set(["openrouter"]);
 
   // What each provider talks to when "API base" is left blank. Ollama is the
-  // only one with a local default; the cloud providers use their own endpoint,
+  // only one with a local default; the cloud provider uses its own endpoint,
   // which litellm supplies.
   const DEFAULT_BASE = {
     ollama: "http://127.0.0.1:11434",
     openrouter: "the provider's own endpoint",
-    anthropic: "the provider's own endpoint",
   };
 
   function isLocalHost(value) {

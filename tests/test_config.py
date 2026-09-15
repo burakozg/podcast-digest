@@ -30,58 +30,10 @@ class TestValidConfig:
         monkeypatch.setenv("PODAGENT_ADMIN_API_KEY", "k")
         monkeypatch.setenv("PODAGENT_COUCHDB_PASSWORD", "p")
         monkeypatch.setenv("PODAGENT_OPENROUTER_API_KEY", "o")
-        # Both providers are in the shipped chains while there is no local model
-        # host: OpenRouter primary, Anthropic fallback. Omitting either key here
-        # would fail this test for the same reason a deployment would refuse to
-        # boot, which is the behaviour, not a test-setup detail.
-        monkeypatch.setenv("PODAGENT_ANTHROPIC_API_KEY", "a")
         settings = load_settings(Path(__file__).parent.parent / "config.yaml")
         assert len(settings.podcasts) == 14
         assert {i.key for i in settings.interest_profile} >= {"ot_ics", "ai_agent_security"}
         assert settings.scheduler.timezone == "Europe/Stockholm"
-
-    def test_generated_local_config_needs_no_anthropic_key(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A dev machine must boot with the OpenRouter key alone.
-
-        Adding the Anthropic fallback to config.yaml made the *local* config
-        unbootable: an anthropic endpoint in the chain is a hard startup failure
-        when PODAGENT_ANTHROPIC_API_KEY is unset, so `uv run podcast-agent`
-        died on a machine that had never needed a second vendor's key. This
-        pins the property that broke — the generator strips those endpoints —
-        rather than the mechanism, which is free to change.
-        """
-        import importlib.util
-
-        root = Path(__file__).parent.parent
-        spec = importlib.util.spec_from_file_location(
-            "make_local_config", root / "scripts" / "make-local-config.py"
-        )
-        assert spec is not None and spec.loader is not None
-        generator = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(generator)
-
-        text = (root / "config.yaml").read_text(encoding="utf-8")
-        for old, new, _must_match in generator.REPLACEMENTS:
-            text = text.replace(old, new)
-        text, dropped = generator.strip_anthropic_fallbacks(text)
-        assert dropped >= 1, "expected the generator to strip anthropic endpoints"
-
-        local = tmp_path / "config.local.yaml"
-        local.write_text(text, encoding="utf-8")
-
-        monkeypatch.setenv("PODAGENT_ADMIN_API_KEY", "k")
-        monkeypatch.setenv("PODAGENT_COUCHDB_PASSWORD", "p")
-        monkeypatch.setenv("PODAGENT_OPENROUTER_API_KEY", "o")
-        monkeypatch.delenv("PODAGENT_ANTHROPIC_API_KEY", raising=False)
-
-        settings = load_settings(local)
-        for name, tier in settings.llm.tiers.items():
-            assert tier.active_chain(), f"tier {name} has no reachable endpoint"
-            assert all(e.provider is not Provider.ANTHROPIC for e in tier.active_chain()), (
-                f"tier {name} still has an anthropic endpoint, so local dev needs that key"
-            )
 
     def test_repo_config_has_no_local_only_tier(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Every shipped tier must have a reachable endpoint without a model host.
@@ -95,7 +47,6 @@ class TestValidConfig:
         monkeypatch.setenv("PODAGENT_ADMIN_API_KEY", "k")
         monkeypatch.setenv("PODAGENT_COUCHDB_PASSWORD", "p")
         monkeypatch.setenv("PODAGENT_OPENROUTER_API_KEY", "o")
-        monkeypatch.setenv("PODAGENT_ANTHROPIC_API_KEY", "a")
         settings = load_settings(Path(__file__).parent.parent / "config.yaml")
         for name, tier in settings.llm.tiers.items():
             assert tier.active_chain(), f"tier {name} has no reachable endpoint"
@@ -153,7 +104,6 @@ class TestOverridePrecedence:
         monkeypatch.setenv("PODAGENT_ADMIN_API_KEY", "k")
         monkeypatch.setenv("PODAGENT_COUCHDB_PASSWORD", "p")
         monkeypatch.setenv("PODAGENT_OPENROUTER_API_KEY", "o")
-        monkeypatch.setenv("PODAGENT_ANTHROPIC_API_KEY", "a")
 
     def test_environment_beats_a_console_override(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

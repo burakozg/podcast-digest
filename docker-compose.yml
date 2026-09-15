@@ -55,11 +55,10 @@ services:
       PODAGENT_CONFIG_FILE: /config/config.yaml
       PODAGENT_ADMIN_API_KEY: ${PODAGENT_ADMIN_API_KEY:?set PODAGENT_ADMIN_API_KEY in .env}
       PODAGENT_COUCHDB_PASSWORD: ${COUCHDB_PASSWORD:?set COUCHDB_PASSWORD in .env}
-      # Both required by the shipped config.yaml (OpenRouter primary, Anthropic
-      # fallback). Left unset the container exits at startup with a config error
+      # Required by the shipped config.yaml (OpenRouter is the primary for every
+      # tier). Left unset the container exits at startup with a config error
       # naming the tier, which is the intended failure — see config.yaml `llm:`.
       PODAGENT_OPENROUTER_API_KEY: ${PODAGENT_OPENROUTER_API_KEY:-}
-      PODAGENT_ANTHROPIC_API_KEY: ${PODAGENT_ANTHROPIC_API_KEY:-}
       PODAGENT_COUCHDB__URL: http://couchdb-podcast:5984
       # The CouchDB an Obsidian vault replicates against, for projecting digests
       # into it over Self-hosted LiveSync. A *different* database from the one

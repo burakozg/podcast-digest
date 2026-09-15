@@ -41,7 +41,7 @@ router = APIRouter(prefix="/api/v1/settings", dependencies=[Depends(require_api_
 class EndpointIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["ollama", "openrouter", "anthropic"]
+    provider: Literal["ollama", "openrouter"]
     model: str = Field(min_length=1, max_length=200)
     api_base: str | None = None
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
@@ -195,7 +195,6 @@ async def read_settings(request: Request) -> dict[str, Any]:
         # tell it apart from a restart that never happened.
         "started_at": getattr(request.app.state, "started_at", None),
         "has_openrouter_key": settings.openrouter_api_key is not None,
-        "has_anthropic_key": settings.anthropic_api_key is not None,
     }
 
 
@@ -263,7 +262,7 @@ async def reset_settings(request: Request) -> dict[str, Any]:
 #: Secrets are excluded from the round-trip: they are SecretStr in the dump and
 #: come back from the environment on re-validation anyway.
 _SECRET_FIELDS = frozenset(
-    {"admin_api_key", "couchdb_password", "openrouter_api_key", "anthropic_api_key", "ntfy_token"}
+    {"admin_api_key", "couchdb_password", "openrouter_api_key", "ntfy_token"}
 )
 
 
