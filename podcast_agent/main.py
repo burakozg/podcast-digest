@@ -16,7 +16,7 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.openapi.docs import get_swagger_ui_html
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import ValidationError
 
 from . import __version__, logstore
@@ -487,6 +487,12 @@ def build_app(settings: Settings, *, store: Store | None = None, llm: Any = None
             return handler
 
         app.get(route, include_in_schema=False)(_console())
+
+    @app.get("/", include_in_schema=False)
+    async def root() -> RedirectResponse:
+        """So `podcast-digest.servers.zou/` lands on the console instead of a
+        bare 404 — there was never a route for `/` itself, only `/admin*`."""
+        return RedirectResponse(url="/admin")
 
     app.state.settings = settings
     return app
