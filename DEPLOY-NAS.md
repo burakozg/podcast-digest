@@ -100,9 +100,12 @@ PODAGENT_OPENROUTER_API_KEY=
 DIGEST_DIR=./digests
 
 # Loopback only, and superseded anyway: docker-compose.nas.yml hardcodes the
-# agent's published port to 127.0.0.1:8080 rather than reading this. Kept in
-# the template because the portable, non-NAS compose file still honours it
-# (${AGENT_BIND:-8080}:8080), and .env is shared between the two.
+# agent's published port to 127.0.0.1:8080 rather than reading this — stuck at
+# 8080, not 80, because this NAS's own QTS already owns port 80 on every
+# interface including loopback (apache_proxy/apache_proxys, its system web
+# admin). Kept in the template because the portable, non-NAS compose file
+# still honours it (${AGENT_BIND:-80}:80 — no such conflict off this NAS), and
+# .env is shared between the two.
 AGENT_BIND=127.0.0.1:8080
 
 # PODAGENT_ASR__MODEL is deliberately NOT set here. It once was, to shrink the

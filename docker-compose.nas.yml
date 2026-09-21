@@ -22,7 +22,7 @@
 #    directories sidesteps it without needing sudo on the NAS. CouchDB needs no
 #    such treatment: its entrypoint starts as root and chowns its own data dir.
 #
-# 3. No LAN IP of its own any more, and the base file's host-published :8080
+# 3. No LAN IP of its own any more, and the base file's host-published :80
 #    is overridden below to loopback-only. Part of the central-login migration
 #    (see homelab-auth/README.md): the agent is reached only through Traefik's
 #    podcast-digest.servers.zou route, which now handles login itself — the
@@ -103,12 +103,19 @@ services:
       # Replaces the podcast-work named volume from the base file. Same target
       # path, so this entry supersedes it rather than adding a second mount.
       - ./work:/data/work
-    # Overrides the base file's "${AGENT_BIND:-8080}:8080" (bound to every
+    # Overrides the base file's "${AGENT_BIND:-80}:80" (bound to every
     # interface) to loopback-only — otherwise the base file alone would still
     # publish this on the LAN, defeating the whole point of the network change
     # below. `ssh -L`/the NAS host itself can still reach it; nothing else can.
+    #
+    # Host side stays 8080, NOT 80: this NAS's own QTS already owns port 80 on
+    # every interface, including loopback — it's `apache_proxy`/`apache_proxys`
+    # (/etc/apache-sys-proxy*.conf), the system's own web admin proxy. Binding
+    # 127.0.0.1:80 here fails with "address already in use" (found by trying).
+    # Only this loopback publish is affected — the container's own internal
+    # port (right-hand side) is unaffected and stays 80 like every other app.
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8080:80"
     networks:
       internal: {}
       homelab-internal: {}

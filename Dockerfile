@@ -36,12 +36,12 @@ RUN useradd --system --uid 10001 --create-home --home-dir /home/podagent podagen
     && chown -R podagent:podagent /data
 USER 10001
 
-EXPOSE 8080
+EXPOSE 80
 
 # Uses the unauthenticated /healthz, which fails 503 when CouchDB is unreachable
 # or the scheduler has stopped (§9).
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
-    CMD python -c "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=8).status==200 else 1)"
+    CMD python -c "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:80/healthz', timeout=8).status==200 else 1)"
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["podcast-agent"]

@@ -113,10 +113,10 @@ docker compose exec ollama ollama pull qwen3:8b    # tier0
 docker compose exec ollama ollama pull qwen3:32b   # tier1
 ```
 
-Then open the console at `http://<host>:8080/admin`, or kick a first run by hand:
+Then open the console at `http://<host>/admin`, or kick a first run by hand:
 
 ```bash
-export HOST=127.0.0.1:8080   # or <nas-ip>:8080
+export HOST=127.0.0.1   # or <nas-ip>
 
 curl -fsS "http://$HOST/healthz" | jq
 curl -fsS -X POST "http://$HOST/api/v1/runs/ingest?wait=true" | jq
@@ -1101,7 +1101,7 @@ $EDITOR .env                    # DIGEST_DIR → the synced vault folder there;
 export COUCHDB_PASSWORD=$(grep -E '^COUCHDB_PASSWORD=' .env | cut -d= -f2-)
 ./scripts/restore.sh backups/podcast_agent-<stamp>.json.gz
 docker compose up -d --build
-curl -fsS http://<new-host>:8080/healthz | jq
+curl -fsS http://<new-host>/healthz | jq
 ```
 
 Nothing needs pulling on the new machine: as shipped both tiers are cloud, so

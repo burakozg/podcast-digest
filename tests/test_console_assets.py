@@ -339,9 +339,15 @@ class TestTheDeploymentStackHoldsItsShape:
         assert "ports" not in couch
 
     def test_the_agent_publishes_its_port(self) -> None:
-        """Bridge networking rather than macvlan, so one file serves every host."""
+        """Bridge networking rather than macvlan, so one file serves every host.
+
+        Every app behind Traefik's central login listens on 80 now, both
+        inside the container and on the published host port — housekeeping
+        consistency.
+        """
         agent = self._stack()["services"]["podcast-agent"]
-        assert any(str(p).endswith(":8080") for p in agent["ports"])
+        ports = [str(p) for p in agent["ports"]]
+        assert any(p.endswith(":80") for p in ports)
 
     def test_the_local_model_service_is_opt_in(self) -> None:
         """A machine running Ollama natively — for a GPU a container cannot

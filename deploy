@@ -54,10 +54,10 @@ do_ship() {
 # instead. Same contract as nas_probe/nas_wait_reachable (same messages, same
 # non-zero-on-failure), just a different transport.
 do_probe_via_traefik() {
-  if nas_ssh "'${NAS_DOCKER_BIN}' exec traefik-1 wget -q -O /dev/null --timeout=5 http://podcast-agent:8080/admin" 2>/dev/null; then
-    echo "✓ Agent: up → http://podcast-agent:8080 (via Traefik's internal network)"
+  if nas_ssh "'${NAS_DOCKER_BIN}' exec traefik-1 wget -q -O /dev/null --timeout=5 http://podcast-agent:80/admin" 2>/dev/null; then
+    echo "✓ Agent: up → http://podcast-agent:80 (via Traefik's internal network)"
   else
-    echo "✗ Agent: no answer at http://podcast-agent:8080/admin (via Traefik's internal network)"
+    echo "✗ Agent: no answer at http://podcast-agent:80/admin (via Traefik's internal network)"
     return 1
   fi
 }
