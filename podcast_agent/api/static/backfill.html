@@ -11,8 +11,10 @@
   console put a switch that can consume days of compute next to buttons that
   take seconds.
 
-  Same posture as the other consoles: self-contained, no external requests,
-  inert shell, key supplied by the browser.
+  Same posture as the other consoles: self-contained, no external requests.
+  Authentication is the reverse proxy's job (a session cookie set at login,
+  before any request reaches this app) — the page carries no credential of
+  its own.
 -->
 <style>
   :root {
@@ -80,7 +82,6 @@
   #msg.show { display: block; }
   #msg.err { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
   #msg.ok { background: color-mix(in srgb, var(--good) 12%, transparent); color: var(--good); }
-  #gate { padding: 2rem 1.25rem; max-width: 420px; margin: 3rem auto; }
   select, input[type=search] {
     font: inherit; font-size: .88rem; padding: .4rem .55rem; border-radius: 7px;
     border: 1px solid var(--line); background: var(--bg); color: var(--ink);
@@ -102,29 +103,16 @@
   #drawer .summary { white-space: pre-wrap; margin-top: .8rem; }
   #drawer ul { margin: .4rem 0 0; padding-left: 1.1rem; }
   .closebar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-  input[type=password] {
-    font: inherit; width: 100%; padding: .5rem .65rem; border-radius: 7px;
-    border: 1px solid var(--line); background: var(--bg); color: var(--ink); margin: .5rem 0;
-  }
 </style>
 </head>
 <body>
 
-<div id="gate" hidden>
-  <h1>Historical intake</h1>
-  <p class="sub">Enter the admin API key. Kept in this tab only.</p>
-  <input type="password" id="key" placeholder="API key">
-  <button class="primary" id="unlock">Unlock</button>
-  <p class="sub" id="gateErr" style="color:var(--bad)"></p>
-</div>
-
-<div id="app" hidden>
+<div id="app">
 <!--NAV-->
 <header>
   <h1>Historical intake</h1>
   <span class="pill" id="tick"></span>
   <span style="flex:1"></span>
-  <button id="forget">Forget key</button>
 </header>
 
 <main>
@@ -225,18 +213,11 @@
 <script>
 (() => {
   "use strict";
-  const KEY_NAME = "podagent_key";
   const $ = (id) => document.getElementById(id);
   let timer = null;
 
-  const key = () => sessionStorage.getItem(KEY_NAME) || "";
-
   async function api(path, options = {}) {
-    const res = await fetch(path, {
-      ...options,
-      headers: { "X-API-Key": key(), ...(options.headers || {}) },
-    });
-    if (res.status === 401) { lock("Key rejected."); throw new Error("unauthorised"); }
+    const res = await fetch(path, options);
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
       const d = body.detail;
@@ -358,7 +339,7 @@
 
   async function refresh() {
     try { render(await api("/api/v1/status")); }
-    catch (err) { if (err.message !== "unauthorised") say(err.message, "err"); }
+    catch (err) { say(err.message, "err"); }
   }
 
   async function post(path, label) {
@@ -395,32 +376,12 @@
     post("/api/v1/backfill/control?paused=false&note=started+from+console", "Start intake"));
   $("bfPause").addEventListener("click", () =>
     post("/api/v1/backfill/control?paused=true&note=paused+from+console", "Pause intake"));
-  $("forget").addEventListener("click", () => lock("Key cleared."));
-  $("unlock").addEventListener("click", unlock);
-  $("key").addEventListener("keydown", (e) => { if (e.key === "Enter") unlock(); });
-
-  async function unlock() {
-    const value = $("key").value.trim();
-    if (!value) return;
-    sessionStorage.setItem(KEY_NAME, value);
-    try { await api("/api/v1/status"); start(); }
-    catch { sessionStorage.removeItem(KEY_NAME); $("gateErr").textContent = "That key was rejected."; }
-  }
-
-  function lock(reason) {
-    sessionStorage.removeItem(KEY_NAME);
-    if (timer) { clearInterval(timer); timer = null; }
-    $("app").hidden = true; $("gate").hidden = false;
-    $("gateErr").textContent = reason || "";
-  }
-
   function start() {
-    $("gate").hidden = true; $("app").hidden = false;
     refresh();
     if (!timer) timer = setInterval(refresh, 5000);
   }
 
-  if (key()) start(); else $("gate").hidden = false;
+  start();
 })();
 </script>
 </body>

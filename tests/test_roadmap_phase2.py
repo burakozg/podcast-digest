@@ -28,7 +28,6 @@ from podcast_agent.summarize.tier1 import PROMPT_VERSIONS, Tier1Stage
 from podcast_agent.utils import describe_age, episode_age_days
 
 S = EpisodeStatus
-KEY = {"X-API-Key": "test-admin-key"}
 LONG_TEXT = "A substantive transcript sentence about ICS security. " * 40
 
 
@@ -481,7 +480,7 @@ class TestGlance:
 
     def test_empty_state_is_still_a_sentence(self, tmp_path: Path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/glance", headers=KEY).json()
+            body = client.get("/api/v1/glance").json()
         assert body["headline"] == "Podcast digest: 0 new summaries"
         assert body["top_pick"] is None
 
@@ -501,7 +500,7 @@ class TestGlance:
             ),
         )
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/glance", headers=KEY).json()
+            body = client.get("/api/v1/glance").json()
 
         assert "2 new summaries" in body["headline"]
         # Highest score wins, not the most recent.
@@ -513,7 +512,7 @@ class TestGlance:
             make_episode(guid="only", status=S.READY_FOR_DIGEST, tier1={"relevance_score": 7})
         )
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/glance", headers=KEY).json()
+            body = client.get("/api/v1/glance").json()
         assert "1 new summary" in body["headline"]
 
     def test_headline_fits_a_small_display(self, tmp_path: Path, store: MemoryStore) -> None:
@@ -526,9 +525,5 @@ class TestGlance:
             )
         )
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/glance", headers=KEY).json()
+            body = client.get("/api/v1/glance").json()
         assert len(body["headline"]) <= 120
-
-    def test_requires_the_api_key(self, tmp_path: Path, store: MemoryStore) -> None:
-        with self._client(tmp_path, store) as client:
-            assert client.get("/api/v1/glance").status_code == 401

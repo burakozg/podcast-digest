@@ -32,7 +32,6 @@ from podcast_agent.models import ContentSeed, ContentSeeds, ContentThread
 from podcast_agent.state import EpisodeStatus
 
 S = EpisodeStatus
-KEY = {"X-API-Key": "test-admin-key"}
 RECENT = datetime.now(UTC) - timedelta(days=3)
 
 
@@ -276,10 +275,6 @@ class TestApi:
             build_app(content_settings(tmp_path, **over), store=store, llm=seed_llm())
         )
 
-    def test_it_needs_the_key(self, tmp_path, store: MemoryStore) -> None:
-        with self._client(tmp_path, store) as client:
-            assert client.get("/api/v1/content/seeds").status_code == 401
-
     def test_the_preview_spends_no_call(self, tmp_path, store: MemoryStore) -> None:
         calls = {"n": 0}
 
@@ -290,14 +285,14 @@ class TestApi:
         store.seed(episode("a"))
         app = build_app(content_settings(tmp_path), store=store, llm=FakeLLM(handler))
         with TestClient(app) as client:
-            body = client.get("/api/v1/content/seeds", headers=KEY).json()
+            body = client.get("/api/v1/content/seeds").json()
         assert body["count"] == 1
         assert calls["n"] == 0
 
     def test_generating_writes_the_file(self, tmp_path, store: MemoryStore) -> None:
         store.seed(episode("a"))
         with self._client(tmp_path, store) as client:
-            body = client.post("/api/v1/content/seeds", headers=KEY).json()
+            body = client.post("/api/v1/content/seeds").json()
         assert body["seeds"] == 1
         assert body["file_path"] == OUTPUT_FILENAME
 
@@ -308,7 +303,7 @@ class TestApi:
         store.seed(episode("a"))
         app = build_app(settings, store=store, llm=seed_llm())
         with TestClient(app) as client:
-            response = client.post("/api/v1/content/seeds", headers=KEY)
+            response = client.post("/api/v1/content/seeds")
         assert response.status_code == 409
         assert "switched off" in response.json()["detail"]
 
@@ -316,7 +311,7 @@ class TestApi:
         self, tmp_path, store: MemoryStore
     ) -> None:
         with self._client(tmp_path, store) as client:
-            response = client.post("/api/v1/content/seeds", headers=KEY)
+            response = client.post("/api/v1/content/seeds")
         assert response.status_code == 503
         assert "no candidate episodes" in response.json()["detail"]
 

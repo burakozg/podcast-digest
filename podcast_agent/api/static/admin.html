@@ -9,9 +9,9 @@
   Operations console (roadmap B2). Deliberately one self-contained file with no
   external requests: this service is LAN-only and has no business fetching a CDN.
 
-  The page itself carries no data. The API key is entered once and held in
-  sessionStorage, and every request sends it as X-API-Key — so the shell can be
-  served unauthenticated while the data behind it is not.
+  Authentication is the reverse proxy's job (a session cookie set at login,
+  before any request reaches this app) — the page carries no credential of
+  its own.
 -->
 <style>
   :root {
@@ -79,7 +79,6 @@
   #msg.show { display: block; }
   #msg.err { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
   #msg.ok { background: color-mix(in srgb, var(--good) 12%, transparent); color: var(--good); }
-  #gate { padding: 2rem 1.25rem; max-width: 420px; margin: 3rem auto; }
   .jobgrid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
   .jobgrid p { margin: .4rem 0 0; }
   /* The answer to "has this run?" belongs beside the button that runs it. */
@@ -108,31 +107,17 @@
   #drawer .summary { white-space: pre-wrap; margin-top: .8rem; }
   #drawer ul { margin: .4rem 0 0; padding-left: 1.1rem; }
   .closebar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-  input[type=password] {
-    font: inherit; width: 100%; padding: .5rem .65rem; border-radius: 7px;
-    border: 1px solid var(--line); background: var(--bg); color: var(--ink); margin: .5rem 0;
-  }
 </style>
 </head>
 <body>
 
-<div id="gate" hidden>
-  <h1>Operations</h1>
-  <p class="sub">Enter the admin API key (<code>PODAGENT_ADMIN_API_KEY</code>). It is
-     kept in this tab only and never stored on disk.</p>
-  <input type="password" id="key" autocomplete="current-password" placeholder="API key">
-  <button class="primary" id="unlock">Unlock</button>
-  <p class="sub" id="gateErr" style="color:var(--bad)"></p>
-</div>
-
-<div id="app" hidden>
+<div id="app">
 <!--NAV-->
 <header>
   <h1>Operations</h1>
   <span class="pill" id="health">checking…</span>
   <span class="pill" id="tick"></span>
   <span style="flex:1"></span>
-  <button id="forget">Forget key</button>
 </header>
 
 <main>
@@ -241,18 +226,11 @@
 <script>
 (() => {
   "use strict";
-  const KEY_NAME = "podagent_key";
   const $ = (id) => document.getElementById(id);
   let timer = null;
 
-  const key = () => sessionStorage.getItem(KEY_NAME) || "";
-
   async function api(path, options = {}) {
-    const res = await fetch(path, {
-      ...options,
-      headers: { "X-API-Key": key(), ...(options.headers || {}) },
-    });
-    if (res.status === 401) { lock("Key rejected."); throw new Error("unauthorised"); }
+    const res = await fetch(path, options);
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.detail ? JSON.stringify(body.detail) : `HTTP ${res.status}`);
     return body;
@@ -403,7 +381,7 @@
       renderLastRuns(await api("/api/v1/runs/last"));
       renderCosts(await api("/api/v1/telemetry/costs?days=30"));
     } catch (err) {
-      if (err.message !== "unauthorised") say(`Refresh failed: ${err.message}`, "err");
+      say(`Refresh failed: ${err.message}`, "err");
     }
   }
 
@@ -442,41 +420,15 @@
         post(path, label);
       });
     });
-    $("forget").addEventListener("click", () => lock("Key cleared."));
-    $("unlock").addEventListener("click", unlock);
-    $("key").addEventListener("keydown", (e) => { if (e.key === "Enter") unlock(); });
-  }
-
-  async function unlock() {
-    const value = $("key").value.trim();
-    if (!value) return;
-    sessionStorage.setItem(KEY_NAME, value);
-    try {
-      await api("/api/v1/status");
-      start();
-    } catch {
-      sessionStorage.removeItem(KEY_NAME);
-      $("gateErr").textContent = "That key was rejected.";
-    }
-  }
-
-  function lock(reason) {
-    sessionStorage.removeItem(KEY_NAME);
-    if (timer) { clearInterval(timer); timer = null; }
-    $("app").hidden = true;
-    $("gate").hidden = false;
-    $("gateErr").textContent = reason || "";
   }
 
   function start() {
-    $("gate").hidden = true;
-    $("app").hidden = false;
     refresh();
     if (!timer) timer = setInterval(refresh, 5000);
   }
 
   wire();
-  if (key()) start(); else $("gate").hidden = false;
+  start();
 })();
 </script>
 </body>

@@ -53,7 +53,6 @@ services:
       - .env
     environment:
       PODAGENT_CONFIG_FILE: /config/config.yaml
-      PODAGENT_ADMIN_API_KEY: ${PODAGENT_ADMIN_API_KEY:?set PODAGENT_ADMIN_API_KEY in .env}
       PODAGENT_COUCHDB_PASSWORD: ${COUCHDB_PASSWORD:?set COUCHDB_PASSWORD in .env}
       # Required by the shipped config.yaml (OpenRouter is the primary for every
       # tier). Left unset the container exits at startup with a config error

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ..config import Settings
@@ -31,11 +31,10 @@ from ..settings_store import (
     pending_restart,
     set_overrides,
 )
-from .auth import require_api_key
 
 log = get_logger(__name__)
 
-router = APIRouter(prefix="/api/v1/settings", dependencies=[Depends(require_api_key)])
+router = APIRouter(prefix="/api/v1/settings")
 
 
 class EndpointIn(BaseModel):
@@ -261,9 +260,7 @@ async def reset_settings(request: Request) -> dict[str, Any]:
 
 #: Secrets are excluded from the round-trip: they are SecretStr in the dump and
 #: come back from the environment on re-validation anyway.
-_SECRET_FIELDS = frozenset(
-    {"admin_api_key", "couchdb_password", "openrouter_api_key", "ntfy_token"}
-)
+_SECRET_FIELDS = frozenset({"couchdb_password", "openrouter_api_key", "ntfy_token"})
 
 
 def _validate_against(settings: Settings, overrides: dict[str, Any], *, baseline: Settings) -> None:

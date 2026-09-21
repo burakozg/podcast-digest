@@ -22,29 +22,30 @@
 #    directories sidesteps it without needing sudo on the NAS. CouchDB needs no
 #    such treatment: its entrypoint starts as root and chowns its own data dir.
 #
-# 3. A LAN IP for the agent (APP_LAN_IP in .env), on Container Station's
-#    existing qnet network. The console answers on that address directly,
-#    rather than through a port published on the NAS itself.
+# 3. No LAN IP of its own any more, and the base file's host-published :8080
+#    is overridden below to loopback-only. Part of the central-login migration
+#    (see homelab-auth/README.md): the agent is reached only through Traefik's
+#    podcast-digest.servers.zou route, which now handles login itself — the
+#    app's own PODAGENT_ADMIN_API_KEY check has been removed entirely, so
+#    anything reaching this container directly would be completely open.
+#    Traefik gets there over homelab-internal, a bridge shared with it via
+#    `docker network connect` (created once, external here — see that repo).
 #
-#    The agent stays on `internal` as well, and that is not redundant: qnet on
-#    this NAS has no embedded Docker DNS, service names do not resolve on it,
-#    and even direct container-IP-to-container-IP traffic between two qnet
-#    containers has been observed to fail. `couchdb.url` resolves
-#    `couchdb-podcast` over `internal` and must keep doing so.
+#    The agent stays on `internal` too, for the same reason it always did:
+#    qnet-style networks on this NAS have no embedded Docker DNS and even
+#    direct container-IP-to-container-IP traffic between two of them has been
+#    observed to fail. `couchdb.url` resolves `couchdb-podcast` over `internal`
+#    and must keep doing so. homelab-internal is a separate, plain bridge —
+#    Traefik's concern, not this app's database concern — kept apart rather
+#    than reused so the two don't tangle.
 #
-#    CouchDB gets NO qnet address, deliberately. Whoever can reach that database
-#    can change where model work is sent (see the base file's header). It is
-#    published on the NAS's loopback only — enough for the nightly backup, and
-#    invisible from the LAN.
+#    CouchDB gets NO LAN-reachable address, deliberately. Whoever can reach
+#    that database can change where model work is sent (see the base file's
+#    header). It is published on the NAS's loopback only — enough for the
+#    nightly backup, and invisible from the LAN.
 #
-#    NAS_LAN_IP is still accepted as a second fallback: the variable was renamed
-#    to match the other three homelab projects, but the .env it is read from
-#    lives on the NAS and is git-ignored, so nothing here could rename it there.
-#    Either spelling works; drop the old one once the NAS's .env is updated.
-#
-#    Expect the NAS host to be unable to reach APP_LAN_IP itself. That is how
-#    macvlan works, not a fault: a host cannot talk to its own macvlan children.
-#    Drive the console from another machine on the LAN.
+#    The loopback-only port below is for the same kind of local-only access:
+#    reachable via `ssh -L` or from the NAS host itself, never from the LAN.
 #
 # 4. Memory. This NAS has ~7.8 GB total with ~3 GB genuinely free, shared with
 #    Home Assistant, traefik, two other digest services and the wyoming voice
@@ -102,24 +103,15 @@ services:
       # Replaces the podcast-work named volume from the base file. Same target
       # path, so this entry supersedes it rather than adding a second mount.
       - ./work:/data/work
+    # Overrides the base file's "${AGENT_BIND:-8080}:8080" (bound to every
+    # interface) to loopback-only — otherwise the base file alone would still
+    # publish this on the LAN, defeating the whole point of the network change
+    # below. `ssh -L`/the NAS host itself can still reach it; nothing else can.
+    ports:
+      - "127.0.0.1:8080:8080"
     networks:
       internal: {}
-      qnet-static-eth1-dc7e3a:
-        ipv4_address: ${APP_LAN_IP:-${NAS_LAN_IP:-10.0.0.2}}
-        # Pinned PER NETWORK, not on the service. A service-level `mac_address:`
-        # applies to only one of an agent's interfaces — here it landed on the
-        # `internal` bridge and left qnet randomised, which is the one that
-        # matters and the one that looked fixed while it wasn't.
-        #
-        # Why pin at all: docker randomises the MAC on every `create`, and the
-        # router goes on answering for the old one. The agent comes back healthy,
-        # correctly routed, able to reach the internet — and unreachable inbound
-        # for minutes, with its healthcheck none the wiser because that probes
-        # localhost from inside.
-        #
-        # Filled in by `./deploy` from APP_LAN_IP; the value encodes the real
-        # address, so it is a placeholder here for the same reason the address is.
-        mac_address: APP_MAC_PLACEHOLDER
+      homelab-internal: {}
     deploy:
       resources:
         limits:
@@ -154,7 +146,8 @@ services:
       - ./couchdb/config:/opt/couchdb/etc/local.d
 
 networks:
-  # Created and owned by Container Station, not by compose — compose only joins
-  # it, and must not try to define its subnet or parent interface.
-  qnet-static-eth1-dc7e3a:
+  # Created once, shared with Traefik via `docker network connect` — not
+  # created by this compose file, which only joins it. See
+  # homelab-auth/README.md.
+  homelab-internal:
     external: true

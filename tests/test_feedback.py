@@ -19,7 +19,6 @@ from podcast_agent.main import build_app
 from podcast_agent.state import EpisodeStatus
 
 S = EpisodeStatus
-KEY = {"X-API-Key": "test-admin-key"}
 
 
 @pytest.fixture
@@ -111,68 +110,59 @@ class TestApi:
     def test_starring_round_trips(self, tmp_path, store: MemoryStore) -> None:
         doc_id = self._seed(store, "a")
         with self._client(tmp_path, store) as client:
-            assert client.post(f"/api/v1/episodes/{doc_id}/star", headers=KEY).status_code == 200
-            body = client.get(f"/api/v1/episodes/{doc_id}", headers=KEY).json()
+            assert client.post(f"/api/v1/episodes/{doc_id}/star").status_code == 200
+            body = client.get(f"/api/v1/episodes/{doc_id}").json()
         assert body["starred"] is True
 
     def test_unstarring_takes_a_parameter(self, tmp_path, store: MemoryStore) -> None:
         doc_id = self._seed(store, "a")
         with self._client(tmp_path, store) as client:
-            client.post(f"/api/v1/episodes/{doc_id}/star", headers=KEY)
-            client.post(f"/api/v1/episodes/{doc_id}/star?starred=false", headers=KEY)
-            body = client.get(f"/api/v1/episodes/{doc_id}", headers=KEY).json()
+            client.post(f"/api/v1/episodes/{doc_id}/star")
+            client.post(f"/api/v1/episodes/{doc_id}/star?starred=false")
+            body = client.get(f"/api/v1/episodes/{doc_id}").json()
         assert body["starred"] is False
 
     def test_the_verdict_endpoint_validates_direction(self, tmp_path, store: MemoryStore) -> None:
         doc_id = self._seed(store, "a")
         with self._client(tmp_path, store) as client:
-            bad = client.post(
-                f"/api/v1/episodes/{doc_id}/feedback", headers=KEY, json={"verdict": "sideways"}
-            )
+            bad = client.post(f"/api/v1/episodes/{doc_id}/feedback", json={"verdict": "sideways"})
         assert bad.status_code == 422
 
     def test_a_missing_episode_is_404_not_500(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            assert client.post("/api/v1/episodes/nope/star", headers=KEY).status_code == 404
-            assert client.post("/api/v1/episodes/nope/read", headers=KEY).status_code == 404
-
-    def test_the_signals_need_the_key(self, tmp_path, store: MemoryStore) -> None:
-        doc_id = self._seed(store, "a")
-        with self._client(tmp_path, store) as client:
-            assert client.post(f"/api/v1/episodes/{doc_id}/star").status_code == 401
+            assert client.post("/api/v1/episodes/nope/star").status_code == 404
+            assert client.post("/api/v1/episodes/nope/read").status_code == 404
 
     def test_the_list_view_carries_the_signals(self, tmp_path, store: MemoryStore) -> None:
         """A browsing surface must show what is starred without a request a row."""
         doc_id = self._seed(store, "a")
         with self._client(tmp_path, store) as client:
-            client.post(f"/api/v1/episodes/{doc_id}/star", headers=KEY)
-            listed = client.get("/api/v1/episodes", headers=KEY).json()["episodes"]
+            client.post(f"/api/v1/episodes/{doc_id}/star")
+            listed = client.get("/api/v1/episodes").json()["episodes"]
         assert listed[0]["starred"] is True
 
     def test_filtering_by_starred(self, tmp_path, store: MemoryStore) -> None:
         keep = self._seed(store, "keep")
         self._seed(store, "drop")
         with self._client(tmp_path, store) as client:
-            client.post(f"/api/v1/episodes/{keep}/star", headers=KEY)
-            body = client.get("/api/v1/episodes?starred=true", headers=KEY).json()
+            client.post(f"/api/v1/episodes/{keep}/star")
+            body = client.get("/api/v1/episodes?starred=true").json()
         assert [e["_id"] for e in body["episodes"]] == [keep]
 
     def test_filtering_by_unread(self, tmp_path, store: MemoryStore) -> None:
         read = self._seed(store, "read")
         unread = self._seed(store, "unread")
         with self._client(tmp_path, store) as client:
-            client.post(f"/api/v1/episodes/{read}/read", headers=KEY)
-            body = client.get("/api/v1/episodes?unread=true", headers=KEY).json()
+            client.post(f"/api/v1/episodes/{read}/read")
+            body = client.get("/api/v1/episodes?unread=true").json()
         assert [e["_id"] for e in body["episodes"]] == [unread]
 
     def test_filtering_by_flagged(self, tmp_path, store: MemoryStore) -> None:
         flagged = self._seed(store, "flagged")
         self._seed(store, "fine")
         with self._client(tmp_path, store) as client:
-            client.post(
-                f"/api/v1/episodes/{flagged}/feedback", headers=KEY, json={"verdict": "over"}
-            )
-            body = client.get("/api/v1/episodes?flagged=true", headers=KEY).json()
+            client.post(f"/api/v1/episodes/{flagged}/feedback", json={"verdict": "over"})
+            body = client.get("/api/v1/episodes?flagged=true").json()
         assert [e["_id"] for e in body["episodes"]] == [flagged]
 
     def test_a_signal_filter_alone_does_not_require_a_score(
@@ -182,8 +172,8 @@ class TestApi:
         doc = make_episode(guid="unscored", status=S.NEW)
         store.seed(doc)
         with self._client(tmp_path, store) as client:
-            client.post(f"/api/v1/episodes/{doc['_id']}/star", headers=KEY)
-            body = client.get("/api/v1/episodes?starred=true", headers=KEY).json()
+            client.post(f"/api/v1/episodes/{doc['_id']}/star")
+            body = client.get("/api/v1/episodes?starred=true").json()
         assert [e["_id"] for e in body["episodes"]] == [doc["_id"]]
 
 

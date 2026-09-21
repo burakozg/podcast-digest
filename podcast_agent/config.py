@@ -739,7 +739,6 @@ class Settings(BaseSettings):
     video_digest: VideoDigestConfig = Field(default_factory=VideoDigestConfig)
 
     # --- Secrets: environment only, never YAML, never logged (§8) -----------
-    admin_api_key: SecretStr | None = None
     ntfy_token: SecretStr | None = None
     couchdb_password: SecretStr | None = None
     #: Credentials for the *vault's* CouchDB (see VaultConfig) — a different

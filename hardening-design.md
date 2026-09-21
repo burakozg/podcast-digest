@@ -42,7 +42,7 @@ convenient; **P3** optional.
 |---|---|---|
 | H1 | Guard-checked redirect hops | ✅ |
 | H2 | Private-address check per hop | ✅ |
-| H3 | Auth throttling + bind guidance | ✅ |
+| H3 | Auth throttling + bind guidance | ✅ (2026-09: the app-level key this protected was removed entirely — see below) |
 | H4 | `api_base` confined to the file baseline | ✅ (400, not 422 — see below) |
 | H5 | Console escaping audit + regression test | ✅ (audit found no live hole) |
 | H6 | Archive transcription budget | ✅ (own `backfill` key — see below) |
@@ -147,6 +147,13 @@ assert no *other* scheme); resumption re-walks from the original URL.
 ---
 
 ## H3 (P2) — Throttle failed authentication + bind guidance
+
+> **2026-09 update.** The container moved behind a reverse proxy on an internal
+> Docker network with no LAN address or published port of its own; the proxy
+> now authenticates every request with a session cookie before it reaches this
+> app. The app's own `X-API-Key` check (`require_api_key`, `api/auth.py`) and
+> this throttle were removed as a redundant, now-pointless second credential.
+> Left here as the record of why they existed.
 
 **Problem.** `require_api_key` compares in constant time but accepts unlimited
 attempts, and `api.host` defaults to `0.0.0.0` (`config.py:343`) — correct in

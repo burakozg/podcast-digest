@@ -27,7 +27,6 @@ def build(tmp_path: Path, **overrides: Any) -> Settings:
 class TestValidConfig:
     def test_repo_config_yaml_is_valid(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The shipped config.yaml must load — it is the deployment default."""
-        monkeypatch.setenv("PODAGENT_ADMIN_API_KEY", "k")
         monkeypatch.setenv("PODAGENT_COUCHDB_PASSWORD", "p")
         monkeypatch.setenv("PODAGENT_OPENROUTER_API_KEY", "o")
         settings = load_settings(Path(__file__).parent.parent / "config.yaml")
@@ -44,7 +43,6 @@ class TestValidConfig:
         actually run — rather than the provider names, which are expected to
         change back once there is a machine to run Ollama on.
         """
-        monkeypatch.setenv("PODAGENT_ADMIN_API_KEY", "k")
         monkeypatch.setenv("PODAGENT_COUCHDB_PASSWORD", "p")
         monkeypatch.setenv("PODAGENT_OPENROUTER_API_KEY", "o")
         settings = load_settings(Path(__file__).parent.parent / "config.yaml")
@@ -67,10 +65,10 @@ class TestValidConfig:
 
     def test_secrets_are_not_stringified(self, tmp_path: Path) -> None:
         """SecretStr keeps keys out of logs and reprs (§8)."""
-        settings = build(tmp_path)
-        assert "test-admin-key" not in repr(settings)
-        assert settings.admin_api_key is not None
-        assert settings.admin_api_key.get_secret_value() == "test-admin-key"
+        settings = build(tmp_path, couchdb_password="test-secret-password")
+        assert "test-secret-password" not in repr(settings)
+        assert settings.couchdb_password is not None
+        assert settings.couchdb_password.get_secret_value() == "test-secret-password"
 
 
 class TestOverridePrecedence:
@@ -101,7 +99,6 @@ class TestOverridePrecedence:
 
     @pytest.fixture(autouse=True)
     def _secrets(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("PODAGENT_ADMIN_API_KEY", "k")
         monkeypatch.setenv("PODAGENT_COUCHDB_PASSWORD", "p")
         monkeypatch.setenv("PODAGENT_OPENROUTER_API_KEY", "o")
 
@@ -339,15 +336,15 @@ class TestDotEnvSharedWithCompose:
         documented first step in the README."""
         example = (Path(__file__).parent.parent / ".env.example").read_text()
         filled = example.replace(
-            "PODAGENT_ADMIN_API_KEY=", "PODAGENT_ADMIN_API_KEY=abc123"
+            "PODAGENT_OPENROUTER_API_KEY=", "PODAGENT_OPENROUTER_API_KEY=abc123"
         ).replace("COUCHDB_PASSWORD=", "COUCHDB_PASSWORD=secret")
         self._write_env(tmp_path, filled)
         monkeypatch.chdir(tmp_path)
 
         # Omit the test default so the key must come from the .env file itself.
-        settings = build(tmp_path, admin_api_key=DROP)
-        assert settings.admin_api_key is not None
-        assert settings.admin_api_key.get_secret_value() == "abc123"
+        settings = build(tmp_path, openrouter_api_key=DROP)
+        assert settings.openrouter_api_key is not None
+        assert settings.openrouter_api_key.get_secret_value() == "abc123"
 
     def test_every_documented_prefixed_var_reaches_the_container(self) -> None:
         """`.env` must actually be handed to the container.
@@ -387,15 +384,15 @@ class TestDotEnvSharedWithCompose:
     ) -> None:
         self._write_env(
             tmp_path,
-            "PODAGENT_ADMIN_API_KEY=k\n"
+            "PODAGENT_NTFY_TOKEN=k\n"
             "COUCHDB_USER=podagent\n"
             "DIGEST_DIR=./data/digests\n"
             "MACVLAN_PARENT=eth0\n"
             "SOME_UNRELATED_SHELL_VAR=1\n",
         )
         monkeypatch.chdir(tmp_path)
-        settings = build(tmp_path, admin_api_key=DROP)
-        assert settings.admin_api_key is not None
+        settings = build(tmp_path, ntfy_token=DROP)
+        assert settings.ntfy_token is not None
         assert not hasattr(settings, "couchdb_user")
 
     def test_prefixed_vars_in_dotenv_still_apply(
@@ -403,10 +400,10 @@ class TestDotEnvSharedWithCompose:
     ) -> None:
         self._write_env(
             tmp_path,
-            "PODAGENT_ADMIN_API_KEY=k\nPODAGENT_COUCHDB_PASSWORD=pw\n",
+            "PODAGENT_NTFY_TOKEN=k\nPODAGENT_COUCHDB_PASSWORD=pw\n",
         )
         monkeypatch.chdir(tmp_path)
-        settings = build(tmp_path, admin_api_key=DROP)
+        settings = build(tmp_path, ntfy_token=DROP)
         assert settings.couchdb_password is not None
         assert settings.couchdb_password.get_secret_value() == "pw"
 

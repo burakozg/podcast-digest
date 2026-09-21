@@ -22,7 +22,6 @@ from podcast_agent.search import SearchIndex, SearchUnavailable, escape_query
 from podcast_agent.state import EpisodeStatus
 
 S = EpisodeStatus
-KEY = {"X-API-Key": "test-admin-key"}
 
 
 def episode(guid: str, *, title: str = "An episode", **tier1: Any):
@@ -171,15 +170,11 @@ class TestApi:
     def _client(self, tmp_path, store: MemoryStore) -> TestClient:
         return TestClient(build_app(make_settings(tmp_path), store=store, llm=FakeLLM()))
 
-    def test_search_needs_the_key(self, tmp_path, store: MemoryStore) -> None:
-        with self._client(tmp_path, store) as client:
-            assert client.get("/api/v1/search?q=x").status_code == 401
-
     def test_rebuild_then_search(self, tmp_path, store: MemoryStore) -> None:
         store.seed(episode("a", summary_md="All about Purview DSPM."))
         with self._client(tmp_path, store) as client:
-            assert client.post("/api/v1/search/rebuild", headers=KEY).status_code == 200
-            body = client.get("/api/v1/search?q=purview", headers=KEY).json()
+            assert client.post("/api/v1/search/rebuild").status_code == 200
+            body = client.get("/api/v1/search?q=purview").json()
         assert body["count"] == 1
 
     def test_searching_before_the_index_exists_is_409_not_500(
@@ -187,24 +182,22 @@ class TestApi:
     ) -> None:
         """It is a cache that may not exist yet; the fix is a rebuild."""
         with self._client(tmp_path, store) as client:
-            response = client.get("/api/v1/search?q=purview", headers=KEY)
+            response = client.get("/api/v1/search?q=purview")
         assert response.status_code == 409
         assert "rebuild" in response.json()["detail"]
 
     def test_status_reports_whether_it_is_built(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            assert client.get("/api/v1/search/status", headers=KEY).json()["built"] is False
-            client.post("/api/v1/search/rebuild", headers=KEY)
-            assert client.get("/api/v1/search/status", headers=KEY).json()["built"] is True
+            assert client.get("/api/v1/search/status").json()["built"] is False
+            client.post("/api/v1/search/rebuild")
+            assert client.get("/api/v1/search/status").json()["built"] is True
 
     def test_a_hostile_query_is_handled(self, tmp_path, store: MemoryStore) -> None:
         store.seed(episode("a", summary_md="Purview."))
         with self._client(tmp_path, store) as client:
-            client.post("/api/v1/search/rebuild", headers=KEY)
+            client.post("/api/v1/search/rebuild")
             for hostile in ['" OR 1=1 --', "NEAR(", "*", "a AND", '""""']:
-                assert client.get(
-                    "/api/v1/search", params={"q": hostile}, headers=KEY
-                ).status_code in (200, 409)
+                assert client.get("/api/v1/search", params={"q": hostile}).status_code in (200, 409)
 
 
 class TestConsole:
@@ -389,5 +382,5 @@ class TestScheduled:
     def test_sync_is_reachable_from_the_api(self, tmp_path, store: MemoryStore) -> None:
         store.seed(episode("a", summary_md="Purview."))
         with TestClient(build_app(make_settings(tmp_path), store=store, llm=FakeLLM())) as client:
-            body = client.post("/api/v1/search/sync", headers=KEY).json()
+            body = client.post("/api/v1/search/sync").json()
         assert body["indexed"] == 1

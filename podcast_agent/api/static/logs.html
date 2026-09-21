@@ -8,7 +8,9 @@
 <!--
   Activity view: the in-memory log tail, the durable record of job runs, and
   every model call. Same posture as the other console pages — one self-contained
-  file, no external requests, inert shell, key supplied by the browser.
+  file, no external requests. Authentication is the reverse proxy's job (a
+  session cookie set at login, before any request reaches this app) — the page
+  carries no credential of its own.
 -->
 <style>
   :root {
@@ -47,14 +49,12 @@
   button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
   select, input { font: inherit; font-size: .85rem; padding: .35rem .5rem; border-radius: 7px;
                   border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
-  input[type=password] { width: 100%; margin: .5rem 0; }
   .pill { font-size: .72rem; padding: .1rem .45rem; border-radius: 999px;
           border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
   .sub { color: var(--muted); font-size: .82rem; }
   #msg { padding: .5rem .75rem; border-radius: 7px; font-size: .85rem; display: none; }
   #msg.show { display: block; }
   #msg.err { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
-  #gate { padding: 2rem 1.25rem; max-width: 420px; margin: 3rem auto; }
 
   .tabs { display: flex; gap: .3rem; flex-wrap: wrap; margin-bottom: .8rem; }
   .tabs button.here { background: var(--accent); border-color: var(--accent); color: var(--bg); }
@@ -88,15 +88,7 @@
 </head>
 <body>
 
-<div id="gate" hidden>
-  <h1>Logs</h1>
-  <p class="sub">Enter the admin API key. Kept in this tab only.</p>
-  <input type="password" id="key" placeholder="API key">
-  <button class="primary" id="unlock">Unlock</button>
-  <p class="sub" id="gateErr" style="color:var(--bad)"></p>
-</div>
-
-<div id="app" hidden>
+<div id="app">
 <!--NAV-->
 <header>
   <h1>Logs</h1>
@@ -104,7 +96,6 @@
   <span style="flex:1"></span>
   <label class="sub"><input type="checkbox" id="auto" checked> auto-refresh</label>
   <button id="reload">Refresh</button>
-  <button id="forget">Forget key</button>
 </header>
 
 <main>
@@ -223,19 +214,12 @@
 <script>
 (() => {
   "use strict";
-  const KEY_NAME = "podagent_key";
   const $ = (id) => document.getElementById(id);
   let tab = "log";
   let timer = null;
 
-  const key = () => sessionStorage.getItem(KEY_NAME) || "";
-
   async function api(path, options = {}) {
-    const res = await fetch(path, {
-      ...options,
-      headers: { "X-API-Key": key(), ...(options.headers || {}) },
-    });
-    if (res.status === 401) { lock("Key rejected."); throw new Error("unauthorised"); }
+    const res = await fetch(path, options);
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
       const d = body.detail;
@@ -435,7 +419,7 @@
       }
       $("msg").className = "";
     } catch (err) {
-      if (err.message !== "unauthorised") say(`Load failed: ${err.message}`);
+      say(`Load failed: ${err.message}`);
     }
   }
 
@@ -456,29 +440,11 @@
     if ($("auto").checked) timer = setInterval(() => { if (tab === "log") load(); }, 5000);
   }
 
-  async function unlock() {
-    const value = $("key").value.trim();
-    if (!value) return;
-    sessionStorage.setItem(KEY_NAME, value);
-    try { await api("/api/v1/logs?limit=1"); start(); }
-    catch { sessionStorage.removeItem(KEY_NAME); $("gateErr").textContent = "That key was rejected."; }
-  }
-
-  function lock(reason) {
-    sessionStorage.removeItem(KEY_NAME);
-    if (timer) clearInterval(timer);
-    $("app").hidden = true; $("gate").hidden = false;
-    $("gateErr").textContent = reason || "";
-  }
-
-  function start() { $("gate").hidden = true; $("app").hidden = false; load(); schedule(); }
+  function start() { load(); schedule(); }
 
   document.querySelectorAll("[data-tab]").forEach((b) =>
     b.addEventListener("click", () => showTab(b.dataset.tab)));
-  $("unlock").addEventListener("click", unlock);
-  $("key").addEventListener("keydown", (e) => { if (e.key === "Enter") unlock(); });
   $("reload").addEventListener("click", load);
-  $("forget").addEventListener("click", () => lock("Key cleared."));
   $("auto").addEventListener("change", schedule);
   $("fLevel").addEventListener("change", load);
   $("fLimit").addEventListener("change", load);
@@ -494,7 +460,7 @@
     debounce = setTimeout(load, 250);
   });
 
-  if (key()) start(); else $("gate").hidden = false;
+  start();
 })();
 </script>
 </body>

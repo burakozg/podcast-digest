@@ -1,7 +1,6 @@
-"""Admin and health API (§9). LAN-only — see the deployment notes in the README.
-
-All routes except ``/healthz`` require the admin key. Responses never include
-transcripts, prompts or secrets.
+"""Admin and health API (§9). Reachable only through the reverse proxy, which
+authenticates the caller before any request gets here — see the deployment
+notes in the README. Responses never include transcripts, prompts or secrets.
 """
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Body, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from .. import logbuffer, logstore
@@ -63,7 +62,6 @@ from ..state import (
 )
 from ..utils import digest_doc_id, iso, iso_now, podcast_doc_id, utcnow
 from ..vault import LiveSyncVault, VaultUnavailable, sync_all
-from .auth import require_api_key
 
 log = get_logger(__name__)
 
@@ -96,7 +94,7 @@ NEXT_STEP = {
 }
 
 health_router = APIRouter(tags=["health"])
-api_router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_api_key)])
+api_router = APIRouter(prefix="/api/v1")
 
 
 def _settings(request: Request) -> Settings:
@@ -846,11 +844,9 @@ async def read_episode(
 async def export_episode(request: Request, episode_id: str) -> dict[str, Any]:
     """The Markdown, plus the filename to save it under.
 
-    JSON rather than ``text/markdown`` with a ``Content-Disposition`` header
-    because the console authenticates with an ``X-API-Key`` header: a plain
-    ``<a download>`` navigation carries no headers, so the page has to fetch the
-    body itself and hand the browser a Blob — at which point the header would be
-    discarded and the filename has to arrive as data anyway.
+    JSON rather than ``text/markdown`` with a ``Content-Disposition`` header:
+    the console fetches the body itself and hands the browser a Blob to save,
+    so the filename has to arrive as data anyway.
     """
     doc = await _require_episode(request, episode_id)
     if not (doc.get("tier1") or {}).get("summary_md"):

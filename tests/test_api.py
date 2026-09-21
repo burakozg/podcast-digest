@@ -1,4 +1,9 @@
-"""API tests (§9): auth, endpoints, and the LAN-only surface."""
+"""API tests (§9): endpoints and the console surface.
+
+Authentication is the reverse proxy's job now — this app no longer implements
+a credential check of its own, so there is nothing here to test but that every
+endpoint is reachable with no auth header at all.
+"""
 
 from __future__ import annotations
 
@@ -14,8 +19,6 @@ import pytest
 from fastapi.testclient import TestClient
 from helpers import FakeLLM, make_episode, make_settings
 
-from podcast_agent.api import auth
-from podcast_agent.api.auth import MAX_FAILURES, WINDOW_S
 from podcast_agent.config import load_settings
 from podcast_agent.db import MemoryStore
 from podcast_agent.main import build_app
@@ -29,7 +32,6 @@ from podcast_agent.utils import (
 )
 
 S = EpisodeStatus
-KEY = {"X-API-Key": "test-admin-key"}
 
 
 @pytest.fixture
@@ -87,7 +89,11 @@ def seeded_store(store: MemoryStore) -> MemoryStore:
     return store
 
 
-class TestAuth:
+class TestNoAppLevelAuth:
+    """The app implements no credential check of its own (§9 revised): the
+    container is reachable only through the reverse proxy, which authenticates
+    the caller with a session cookie before any request gets here."""
+
     def test_healthz_needs_no_key(self, client: TestClient) -> None:
         assert client.get("/healthz").status_code in (200, 503)
 
@@ -102,35 +108,13 @@ class TestAuth:
             "/openapi.json",
         ],
     )
-    def test_endpoints_require_a_key(self, client: TestClient, path: str) -> None:
-        assert client.get(path).status_code == 401
-
-    def test_wrong_key_is_rejected(self, client: TestClient) -> None:
-        response = client.get("/api/v1/status", headers={"X-API-Key": "wrong"})
-        assert response.status_code == 401
-
-    def test_correct_key_is_accepted(self, client: TestClient) -> None:
-        assert client.get("/api/v1/status", headers=KEY).status_code == 200
-
-    def test_docs_are_behind_the_key(self, client: TestClient) -> None:
-        """§9: /docs is enabled but not public."""
-        assert client.get("/docs").status_code == 401
-        assert client.get("/docs", headers=KEY).status_code == 200
-        assert client.get("/openapi.json", headers=KEY).status_code == 200
-
-    def test_missing_configured_key_fails_closed(self, tmp_path, store: MemoryStore) -> None:
-        """An unset admin key must never mean 'open to everyone'."""
-        settings = make_settings(tmp_path, admin_api_key=None)
-        app = build_app(settings, store=store, llm=FakeLLM())
-        with TestClient(app) as unkeyed:
-            response = unkeyed.get("/api/v1/status", headers=KEY)
-            assert response.status_code == 503
-            assert "not configured" in response.json()["detail"]
+    def test_endpoints_are_reachable_with_no_headers_at_all(
+        self, client: TestClient, path: str
+    ) -> None:
+        assert client.get(path).status_code == 200
 
     def test_cors_is_not_enabled(self, client: TestClient) -> None:
-        response = client.get(
-            "/api/v1/status", headers={**KEY, "Origin": "https://evil.example.com"}
-        )
+        response = client.get("/api/v1/status", headers={"Origin": "https://evil.example.com"})
         assert "access-control-allow-origin" not in {k.lower() for k in response.headers}
 
 
@@ -157,7 +141,7 @@ class TestStatus:
     def test_counts_and_config_are_reported(self, tmp_path, seeded_store: MemoryStore) -> None:
         app = build_app(make_settings(tmp_path), store=seeded_store, llm=FakeLLM())
         with TestClient(app) as client:
-            body = client.get("/api/v1/status", headers=KEY).json()
+            body = client.get("/api/v1/status").json()
         assert body["episode_counts"]["NEW"] == 1
         assert body["episode_counts"]["READY_FOR_DIGEST"] == 1
         assert body["queue_depths"]["triage"] == 1
@@ -189,16 +173,17 @@ class TestStatus:
         )
         app = build_app(make_settings(tmp_path), store=store, llm=FakeLLM())
         with TestClient(app) as client:
-            feeds = client.get("/api/v1/status", headers=KEY).json()["feeds"]
+            feeds = client.get("/api/v1/status").json()["feeds"]
         broken = next(f for f in feeds if f["slug"] == "test-show")
         assert broken["circuit_open"] is True
         assert broken["last_error"] == "503 from origin"
 
     def test_secrets_never_appear(self, tmp_path, seeded_store: MemoryStore) -> None:
-        app = build_app(make_settings(tmp_path), store=seeded_store, llm=FakeLLM())
+        settings = make_settings(tmp_path, openrouter_api_key="test-openrouter-secret")
+        app = build_app(settings, store=seeded_store, llm=FakeLLM())
         with TestClient(app) as client:
-            raw = client.get("/api/v1/status", headers=KEY).text
-        assert "test-admin-key" not in raw
+            raw = client.get("/api/v1/status").text
+        assert "test-openrouter-secret" not in raw
 
 
 class TestEpisodes:
@@ -207,38 +192,38 @@ class TestEpisodes:
 
     def test_list_and_filter(self, tmp_path, seeded_store: MemoryStore) -> None:
         with self._client(tmp_path, seeded_store) as client:
-            all_eps = client.get("/api/v1/episodes", headers=KEY).json()
+            all_eps = client.get("/api/v1/episodes").json()
             assert all_eps["count"] == 3
-            filtered = client.get("/api/v1/episodes?status=NEW", headers=KEY).json()
+            filtered = client.get("/api/v1/episodes?status=NEW").json()
             assert filtered["count"] == 1
-            by_show = client.get("/api/v1/episodes?podcast=test-show", headers=KEY).json()
+            by_show = client.get("/api/v1/episodes?podcast=test-show").json()
             assert by_show["count"] == 3
-            empty = client.get("/api/v1/episodes?podcast=nope", headers=KEY).json()
+            empty = client.get("/api/v1/episodes?podcast=nope").json()
             assert empty["count"] == 0
 
     def test_unknown_status_filter_is_a_400(self, tmp_path, seeded_store: MemoryStore) -> None:
         with self._client(tmp_path, seeded_store) as client:
-            assert client.get("/api/v1/episodes?status=BOGUS", headers=KEY).status_code == 400
+            assert client.get("/api/v1/episodes?status=BOGUS").status_code == 400
 
     def test_listing_omits_tracebacks(self, tmp_path, seeded_store: MemoryStore) -> None:
         with self._client(tmp_path, seeded_store) as client:
-            body = client.get("/api/v1/episodes", headers=KEY).text
+            body = client.get("/api/v1/episodes").text
         assert "secret trace" not in body
 
     def test_detail_includes_traceback(self, tmp_path, seeded_store: MemoryStore) -> None:
         episode_id = make_episode(guid="c")["_id"]
         with self._client(tmp_path, seeded_store) as client:
-            body = client.get(f"/api/v1/episodes/{episode_id}", headers=KEY).json()
+            body = client.get(f"/api/v1/episodes/{episode_id}").json()
         assert body["last_error"]["traceback"] == "secret trace"
 
     def test_bare_hash_id_is_accepted(self, tmp_path, seeded_store: MemoryStore) -> None:
         bare = make_episode(guid="c")["_id"].split(":", 1)[1]
         with self._client(tmp_path, seeded_store) as client:
-            assert client.get(f"/api/v1/episodes/{bare}", headers=KEY).status_code == 200
+            assert client.get(f"/api/v1/episodes/{bare}").status_code == 200
 
     def test_missing_episode_is_a_404(self, tmp_path, seeded_store: MemoryStore) -> None:
         with self._client(tmp_path, seeded_store) as client:
-            assert client.get("/api/v1/episodes/deadbeef", headers=KEY).status_code == 404
+            assert client.get("/api/v1/episodes/deadbeef").status_code == 404
 
     def test_retry_clears_the_crash_counter_too(self, tmp_path, store: MemoryStore) -> None:
         """Retry must clear `transcript_crash`, or it is a no-op where it matters.
@@ -252,7 +237,7 @@ class TestEpisodes:
         episode["attempts"] = {"transcript": 3, "transcript_crash": 3}
         store.seed(episode)
         with self._client(tmp_path, store) as client:
-            response = client.post(f"/api/v1/episodes/{episode['_id']}/retry", headers=KEY)
+            response = client.post(f"/api/v1/episodes/{episode['_id']}/retry")
         assert response.status_code == 200
         doc = store._docs[episode["_id"]]
         assert doc["attempts"]["transcript"] == 0
@@ -263,14 +248,14 @@ class TestEpisodes:
     def test_retry_resets_a_failed_episode(self, tmp_path, seeded_store: MemoryStore) -> None:
         episode_id = make_episode(guid="c")["_id"]
         with self._client(tmp_path, seeded_store) as client:
-            body = client.post(f"/api/v1/episodes/{episode_id}/retry", headers=KEY).json()
+            body = client.post(f"/api/v1/episodes/{episode_id}/retry").json()
         assert body["from"] == "ERROR"
         assert body["to"] == "AWAITING_TRANSCRIPT"
 
     def test_retry_rejects_a_healthy_episode(self, tmp_path, seeded_store: MemoryStore) -> None:
         episode_id = make_episode(guid="b")["_id"]  # READY_FOR_DIGEST
         with self._client(tmp_path, seeded_store) as client:
-            response = client.post(f"/api/v1/episodes/{episode_id}/retry", headers=KEY)
+            response = client.post(f"/api/v1/episodes/{episode_id}/retry")
         assert response.status_code == 409
 
     def test_escalate_a_dropped_episode(self, tmp_path, store: MemoryStore) -> None:
@@ -278,7 +263,7 @@ class TestEpisodes:
         store.seed(make_episode(guid="d", status=S.DROPPED, digest_id="digest:2026-W30"))
         episode_id = make_episode(guid="d")["_id"]
         with self._client(tmp_path, store) as client:
-            body = client.post(f"/api/v1/episodes/{episode_id}/escalate", headers=KEY).json()
+            body = client.post(f"/api/v1/episodes/{episode_id}/escalate").json()
         assert body["to"] == "AWAITING_TRANSCRIPT"
         doc = store._docs[episode_id]
         assert doc["status"] == S.AWAITING_TRANSCRIPT.value
@@ -300,7 +285,7 @@ class TestEpisodes:
         )
         episode_id = make_episode(guid="e")["_id"]
         with self._client(tmp_path, store) as client:
-            response = client.post(f"/api/v1/episodes/{episode_id}/escalate", headers=KEY)
+            response = client.post(f"/api/v1/episodes/{episode_id}/escalate")
         assert response.status_code == 200
         assert response.json()["to"] == S.AWAITING_TRANSCRIPT.value
 
@@ -311,27 +296,25 @@ class TestEpisodes:
 
 class TestRuns:
     def test_ingest_returns_immediately_by_default(self, client: TestClient) -> None:
-        body = client.post("/api/v1/runs/ingest", headers=KEY).json()
+        body = client.post("/api/v1/runs/ingest").json()
         assert body["started"] is True
         assert body["waited"] is False
 
     def test_digest_runs_inline(self, client: TestClient) -> None:
-        body = client.post("/api/v1/runs/digest?dry_run=true", headers=KEY).json()
+        body = client.post("/api/v1/runs/digest?dry_run=true").json()
         assert body["result"]["dry_run"] is True
 
     def test_digest_accepts_a_since_parameter(self, client: TestClient) -> None:
-        response = client.post(
-            "/api/v1/runs/digest?dry_run=true&since=2026-07-01T00:00:00Z", headers=KEY
-        )
+        response = client.post("/api/v1/runs/digest?dry_run=true&since=2026-07-01T00:00:00Z")
         assert response.status_code == 200
 
     def test_pipeline_can_be_awaited(self, client: TestClient) -> None:
-        body = client.post("/api/v1/runs/pipeline?wait=true", headers=KEY).json()
+        body = client.post("/api/v1/runs/pipeline?wait=true").json()
         assert body["waited"] is True
         assert "triaged" in body["result"]
 
     def test_retention_runs_inline(self, client: TestClient) -> None:
-        body = client.post("/api/v1/runs/retention", headers=KEY).json()
+        body = client.post("/api/v1/runs/retention").json()
         assert "transcripts_deleted" in body["result"]
 
 
@@ -339,7 +322,7 @@ class TestTelemetry:
     def test_aggregates_by_dimension(self, tmp_path, seeded_store: MemoryStore) -> None:
         app = build_app(make_settings(tmp_path), store=seeded_store, llm=FakeLLM())
         with TestClient(app) as client:
-            body = client.get("/api/v1/telemetry/costs", headers=KEY).json()
+            body = client.get("/api/v1/telemetry/costs").json()
         assert body["totals"]["calls"] == 2
         assert body["totals"]["cost_usd"] == pytest.approx(0.02)
         assert body["totals"]["fallbacks"] == 1
@@ -363,7 +346,7 @@ class TestTelemetry:
         )
         app = build_app(make_settings(tmp_path), store=store, llm=FakeLLM())
         with TestClient(app) as client:
-            body = client.get("/api/v1/telemetry/costs?days=30", headers=KEY).json()
+            body = client.get("/api/v1/telemetry/costs?days=30").json()
         assert body["totals"]["calls"] == 0
 
 
@@ -383,7 +366,7 @@ class TestDigestsListing:
         )
         app = build_app(make_settings(tmp_path), store=store, llm=FakeLLM())
         with TestClient(app) as client:
-            body = client.get("/api/v1/digests", headers=KEY).json()
+            body = client.get("/api/v1/digests").json()
         assert body["count"] == 1
         assert body["digests"][0]["episodes"] == 1
         assert body["digests"][0]["marking_complete"] is True
@@ -431,17 +414,20 @@ class TestStartup:
 class TestAdminPortal:
     """Operations console (roadmap B2)."""
 
-    def test_page_is_served_without_a_key(self, client: TestClient) -> None:
-        """The shell carries no data; it asks for the key in the browser, which
-        is the only way a page navigation can authenticate a header-keyed API."""
+    def test_page_is_served(self, client: TestClient) -> None:
+        """The shell carries no data of its own — everything it shows is
+        fetched from the API after the page loads."""
         response = client.get("/admin")
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
 
-    def test_page_contains_no_data_or_secrets(self, client: TestClient) -> None:
-        body = client.get("/admin").text
-        assert "test-admin-key" not in body
-        # Nothing but the shell: values arrive over the authenticated API.
+    def test_page_contains_no_data_or_secrets(self, tmp_path, store: MemoryStore) -> None:
+        settings = make_settings(tmp_path, openrouter_api_key="test-openrouter-secret")
+        app = build_app(settings, store=store, llm=FakeLLM())
+        with TestClient(app) as client:
+            body = client.get("/admin").text
+        assert "test-openrouter-secret" not in body
+        # Nothing but the shell: values arrive over the API after the page loads.
         assert "podcast_agent" not in body
 
     def test_page_is_self_contained(self, client: TestClient) -> None:
@@ -453,21 +439,15 @@ class TestAdminPortal:
     def test_page_is_not_indexable(self, client: TestClient) -> None:
         assert "noindex" in client.get("/admin").text
 
-    def test_control_endpoints_need_the_key(self, client: TestClient) -> None:
-        assert client.get("/api/v1/backfill/control").status_code == 401
-        assert client.post("/api/v1/backfill/control?paused=true").status_code == 401
-
     def test_control_round_trip(self, client: TestClient) -> None:
-        assert client.get("/api/v1/backfill/control", headers=KEY).json()["paused"] is True
-        started = client.post(
-            "/api/v1/backfill/control?paused=false&note=from+test", headers=KEY
-        ).json()
+        assert client.get("/api/v1/backfill/control").json()["paused"] is True
+        started = client.post("/api/v1/backfill/control?paused=false&note=from+test").json()
         assert started["paused"] is False
         assert started["note"] == "from test"
-        assert client.get("/api/v1/backfill/control", headers=KEY).json()["paused"] is False
+        assert client.get("/api/v1/backfill/control").json()["paused"] is False
 
     def test_status_reports_control_state(self, client: TestClient) -> None:
-        body = client.get("/api/v1/status", headers=KEY).json()
+        body = client.get("/api/v1/status").json()
         assert body["backfill"]["control"]["paused"] is True
 
 
@@ -500,7 +480,7 @@ class TestEpisodeBrowsing:
     ) -> None:
         await self._seed(store)
         with self._client(tmp_path, store) as client:
-            episodes = client.get("/api/v1/episodes", headers=KEY).json()["episodes"]
+            episodes = client.get("/api/v1/episodes").json()["episodes"]
         by_guid = {e["_id"]: e for e in episodes}
         done = by_guid[make_episode(guid="done")["_id"]]
         bare = by_guid[make_episode(guid="bare")["_id"]]
@@ -513,14 +493,14 @@ class TestEpisodeBrowsing:
         """The list is a browse view; bodies would bloat it for no benefit."""
         await self._seed(store)
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/episodes", headers=KEY).text
+            body = client.get("/api/v1/episodes").text
         assert "The actual summary text." not in body
 
     async def test_detail_returns_the_summary_text(self, tmp_path, store: MemoryStore) -> None:
         await self._seed(store)
         episode_id = make_episode(guid="done")["_id"]
         with self._client(tmp_path, store) as client:
-            body = client.get(f"/api/v1/episodes/{episode_id}", headers=KEY).json()
+            body = client.get(f"/api/v1/episodes/{episode_id}").json()
         assert body["tier1_full"]["summary_md"] == "The actual summary text."
         assert body["tier1_full"]["key_takeaways"] == ["One thing"]
 
@@ -529,13 +509,9 @@ class TestOnDemandSummarize:
     def _client(self, tmp_path, store: MemoryStore, llm=None) -> TestClient:
         return TestClient(build_app(make_settings(tmp_path), store=store, llm=llm or FakeLLM()))
 
-    def test_requires_the_key(self, tmp_path, store: MemoryStore) -> None:
-        with self._client(tmp_path, store) as client:
-            assert client.post("/api/v1/episodes/abc/summarize").status_code == 401
-
     def test_unknown_episode_is_404(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            response = client.post("/api/v1/episodes/deadbeef/summarize", headers=KEY)
+            response = client.post("/api/v1/episodes/deadbeef/summarize")
         assert response.status_code == 404
 
     def test_summarises_without_asr_from_the_description(
@@ -547,7 +523,6 @@ class TestOnDemandSummarize:
         with self._client(tmp_path, store) as client:
             body = client.post(
                 f"/api/v1/episodes/{episode_id}/summarize?allow_asr=false&wait=true",
-                headers=KEY,
             ).json()
         assert body["waited"] is True
         assert body["result"]["summary_basis"] == "description_only"
@@ -568,7 +543,6 @@ class TestOnDemandSummarize:
         with self._client(tmp_path, store) as client:
             response = client.post(
                 f"/api/v1/episodes/{episode_id}/summarize?allow_asr=false&wait=true",
-                headers=KEY,
             )
         assert response.status_code == 200
 
@@ -594,7 +568,6 @@ class TestOnDemandSummarize:
         with self._client(tmp_path, store) as client:
             response = client.post(
                 f"/api/v1/episodes/{episode_id}/summarize?allow_asr=false&wait=true",
-                headers=KEY,
             )
         assert response.status_code == 200, response.json()
         # Back to PUBLISHED, carrying a summary: it is still listed in the
@@ -623,7 +596,6 @@ class TestOnDemandSummarize:
         with self._client(tmp_path, store) as client:
             response = client.post(
                 f"/api/v1/episodes/{episode_id}/summarize?allow_asr=false&wait=true",
-                headers=KEY,
             )
         assert response.status_code == 409
         assert "disagreeing" in response.json()["detail"]
@@ -648,7 +620,6 @@ class TestOnDemandSummarize:
         with self._client(tmp_path, store) as client:
             body = client.post(
                 f"/api/v1/episodes/{episode_id}/summarize?allow_asr=false&wait=true",
-                headers=KEY,
             ).json()
         assert body["result"]["status"] == "PUBLISHED"
 
@@ -683,7 +654,6 @@ class TestOnDemandSummarize:
         with self._client(tmp_path, store) as client:
             response = client.post(
                 f"/api/v1/episodes/{episode_id}/summarize?allow_asr=false&wait=true",
-                headers=KEY,
             )
         assert response.status_code == 200, response.json()
 
@@ -704,7 +674,6 @@ class TestOnDemandSummarize:
         with self._client(tmp_path, store) as client:
             client.post(
                 f"/api/v1/episodes/{episode_id}/summarize?allow_asr=false&wait=true",
-                headers=KEY,
             )
         doc = next(d for d in store.docs_of_type("episode") if d["_id"] == episode_id)
         assert doc["digest_id"] == "archive:test-show:2026-02"
@@ -714,7 +683,7 @@ class TestOnDemandSummarize:
         store.seed(make_episode(guid="bg", status=S.NEW))
         episode_id = make_episode(guid="bg")["_id"]
         with self._client(tmp_path, store) as client:
-            body = client.post(f"/api/v1/episodes/{episode_id}/summarize", headers=KEY).json()
+            body = client.post(f"/api/v1/episodes/{episode_id}/summarize").json()
         assert body["waited"] is False
         assert "poll the episode" in body["detail"]
 
@@ -809,7 +778,7 @@ class TestWhyNoSummary:
             )
         )
         with self._client(tmp_path, store) as client:
-            episode = client.get("/api/v1/episodes", headers=KEY).json()["episodes"][0]
+            episode = client.get("/api/v1/episodes").json()["episodes"][0]
 
         assert episode["status"] == "PUBLISHED"
         assert episode["has_summary"] is False
@@ -827,14 +796,14 @@ class TestWhyNoSummary:
             )
         )
         with self._client(tmp_path, store) as client:
-            episode = client.get("/api/v1/episodes", headers=KEY).json()["episodes"][0]
+            episode = client.get("/api/v1/episodes").json()["episodes"][0]
         assert episode["tier0"]["route"] == "DROP"
         assert episode["has_summary"] is False
 
     def test_untriaged_episode_has_no_tier0(self, tmp_path, store: MemoryStore) -> None:
         store.seed(make_episode(guid="new", status=S.NEW))
         with self._client(tmp_path, store) as client:
-            episode = client.get("/api/v1/episodes", headers=KEY).json()["episodes"][0]
+            episode = client.get("/api/v1/episodes").json()["episodes"][0]
         assert episode["tier0"] is None
 
 
@@ -870,12 +839,7 @@ class TestExportingOneEpisode:
         return str(doc["_id"])
 
     def _export(self, client: TestClient, episode_id: str) -> Any:
-        return client.get(f"/api/v1/episodes/{episode_id}/export", headers=KEY)
-
-    def test_it_needs_the_key(self, tmp_path, store: MemoryStore) -> None:
-        episode_id = self._seed(store)
-        with self._client(tmp_path, store) as client:
-            assert client.get(f"/api/v1/episodes/{episode_id}/export").status_code == 401
+        return client.get(f"/api/v1/episodes/{episode_id}/export")
 
     def test_the_markdown_carries_the_whole_summary(self, tmp_path, store: MemoryStore) -> None:
         episode_id = self._seed(store)
@@ -961,14 +925,9 @@ class TestPodcastManagement:
         external = re.findall(r'(?:src|href)\s*=\s*["\']https?://|@import|url\(\s*https?://', body)
         assert external == [], f"external resource reference: {external}"
 
-    def test_endpoints_need_the_key(self, tmp_path, store: MemoryStore) -> None:
-        with self._client(tmp_path, store) as client:
-            assert client.get("/api/v1/podcasts").status_code == 401
-            assert client.post("/api/v1/podcasts", json={}).status_code == 401
-
     def test_lists_config_shows_with_provenance(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/podcasts", headers=KEY).json()
+            body = client.get("/api/v1/podcasts").json()
         assert body["count"] == 2
         show = next(p for p in body["podcasts"] if p["slug"] == "test-show")
         assert show["source"] == "config"
@@ -988,7 +947,7 @@ class TestPodcastManagement:
             }
         )
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/podcasts", headers=KEY).json()
+            body = client.get("/api/v1/podcasts").json()
         podcast = next(p for p in body["podcasts"] if p["slug"] == "test-show")
         assert podcast["description"] == "Weekly infosec news."
 
@@ -997,7 +956,7 @@ class TestPodcastManagement:
     ) -> None:
         """ "Not polled yet" and "polled, carries none" are different answers."""
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/podcasts", headers=KEY).json()
+            body = client.get("/api/v1/podcasts").json()
         for entry in body["podcasts"]:
             assert entry["description"] == ""
             assert entry["polled_for_metadata"] is False
@@ -1018,7 +977,7 @@ class TestPodcastManagement:
             }
         )
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/podcasts", headers=KEY).json()
+            body = client.get("/api/v1/podcasts").json()
         entry = next(p for p in body["podcasts"] if p["slug"] == "test-show")
         assert entry["transcripts_seen"] == 25
         assert entry["transcripts_of"] == 25
@@ -1039,7 +998,7 @@ class TestPodcastManagement:
             }
         )
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/podcasts", headers=KEY).json()
+            body = client.get("/api/v1/podcasts").json()
         entry = next(p for p in body["podcasts"] if p["slug"] == "test-show")
         assert entry["transcripts_seen"] == 0
         assert entry["transcripts_of"] == 25
@@ -1069,7 +1028,7 @@ class TestPodcastManagement:
             }
         )
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/podcasts", headers=KEY).json()
+            body = client.get("/api/v1/podcasts").json()
         entry = next(p for p in body["podcasts"] if p["slug"] == "test-show")
         assert entry["cadence"] == "~weekly"
         assert entry["cadence_source"] == "feed"
@@ -1088,7 +1047,7 @@ class TestPodcastManagement:
                 )
             )
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/podcasts", headers=KEY).json()
+            body = client.get("/api/v1/podcasts").json()
         entry = next(p for p in body["podcasts"] if p["slug"] == "test-show")
         assert entry["cadence"] == "~weekly"
         assert entry["cadence_source"] == "episodes held"
@@ -1142,8 +1101,8 @@ class TestPodcastManagement:
             }
         )
         with self._client(tmp_path, store) as client:
-            client.patch("/api/v1/podcasts/test-show", headers=KEY, json={"asr_enabled": False})
-            body = client.get("/api/v1/podcasts", headers=KEY).json()
+            client.patch("/api/v1/podcasts/test-show", json={"asr_enabled": False})
+            body = client.get("/api/v1/podcasts").json()
         entry = next(p for p in body["podcasts"] if p["slug"] == "test-show")
         assert entry["archive_indexes_only"] is True
 
@@ -1162,8 +1121,8 @@ class TestPodcastManagement:
             }
         )
         with self._client(tmp_path, store) as client:
-            client.patch("/api/v1/podcasts/test-show", headers=KEY, json={"asr_enabled": True})
-            body = client.get("/api/v1/podcasts", headers=KEY).json()
+            client.patch("/api/v1/podcasts/test-show", json={"asr_enabled": True})
+            body = client.get("/api/v1/podcasts").json()
         entry = next(p for p in body["podcasts"] if p["slug"] == "test-show")
         assert entry["archive_indexes_only"] is False
 
@@ -1181,7 +1140,7 @@ class TestPodcastManagement:
             }
         )
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/podcasts", headers=KEY).json()
+            body = client.get("/api/v1/podcasts").json()
         entry = next(p for p in body["podcasts"] if p["slug"] == "test-show")
         assert entry["archive_indexes_only"] is False
 
@@ -1190,7 +1149,7 @@ class TestPodcastManagement:
     ) -> None:
         """Not yet measured is not the same as measured zero."""
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/podcasts", headers=KEY).json()
+            body = client.get("/api/v1/podcasts").json()
         assert all(p["archive_indexes_only"] is False for p in body["podcasts"])
 
     def test_an_unreachable_archive_mode_says_so(self, tmp_path, store: MemoryStore) -> None:
@@ -1215,10 +1174,10 @@ class TestPodcastManagement:
         with self._client(tmp_path, store) as client:
             # Publishes nothing and is not set to transcribe: nothing to
             # summarise from, whatever the archive mode says.
-            client.patch("/api/v1/podcasts/test-show", headers=KEY, json={"asr_enabled": False})
+            client.patch("/api/v1/podcasts/test-show", json={"asr_enabled": False})
             entry = next(
                 p
-                for p in client.get("/api/v1/podcasts", headers=KEY).json()["podcasts"]
+                for p in client.get("/api/v1/podcasts").json()["podcasts"]
                 if p["slug"] == "test-show"
             )
         assert entry["backfill_mode"] == "full"
@@ -1240,7 +1199,7 @@ class TestPodcastManagement:
         with self._client(tmp_path, store) as client:
             entry = next(
                 p
-                for p in client.get("/api/v1/podcasts", headers=KEY).json()["podcasts"]
+                for p in client.get("/api/v1/podcasts").json()["podcasts"]
                 if p["slug"] == "test-show"
             )
         assert entry["archive_indexes_only"] is False
@@ -1261,10 +1220,10 @@ class TestPodcastManagement:
             }
         )
         with self._client(tmp_path, store) as client:
-            client.patch("/api/v1/podcasts/test-show", headers=KEY, json={"backfill_mode": "skip"})
+            client.patch("/api/v1/podcasts/test-show", json={"backfill_mode": "skip"})
             entry = next(
                 p
-                for p in client.get("/api/v1/podcasts", headers=KEY).json()["podcasts"]
+                for p in client.get("/api/v1/podcasts").json()["podcasts"]
                 if p["slug"] == "test-show"
             )
         assert entry["archive_indexes_only"] is False
@@ -1297,7 +1256,7 @@ class TestPodcastManagement:
                 }
             )
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/podcasts", headers=KEY).json()
+            body = client.get("/api/v1/podcasts").json()
         podcast = next(p for p in body["podcasts"] if p["slug"] == "test-show")
         assert podcast["cadence"] == "~weekly"
         assert "median" in podcast["cadence_detail"]
@@ -1306,7 +1265,7 @@ class TestPodcastManagement:
     def test_cadence_is_null_without_enough_history(self, tmp_path, store: MemoryStore) -> None:
         """Better nothing than a rhythm inferred from two episodes."""
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/podcasts", headers=KEY).json()
+            body = client.get("/api/v1/podcasts").json()
         podcast = next(p for p in body["podcasts"] if p["slug"] == "test-show")
         assert podcast["cadence"] is None
         assert podcast["cadence_detail"] is None
@@ -1314,14 +1273,12 @@ class TestPodcastManagement:
     def test_override_changes_the_effective_value(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
             assert (
-                client.patch(
-                    "/api/v1/podcasts/test-show", headers=KEY, json={"asr_enabled": False}
-                ).status_code
+                client.patch("/api/v1/podcasts/test-show", json={"asr_enabled": False}).status_code
                 == 200
             )
             show = next(
                 p
-                for p in client.get("/api/v1/podcasts", headers=KEY).json()["podcasts"]
+                for p in client.get("/api/v1/podcasts").json()["podcasts"]
                 if p["slug"] == "test-show"
             )
         assert show["asr_enabled"] is False
@@ -1330,11 +1287,11 @@ class TestPodcastManagement:
 
     def test_override_can_be_reverted_to_config(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            client.patch("/api/v1/podcasts/test-show", headers=KEY, json={"priority": "low"})
-            client.delete("/api/v1/podcasts/test-show/overrides/priority", headers=KEY)
+            client.patch("/api/v1/podcasts/test-show", json={"priority": "low"})
+            client.delete("/api/v1/podcasts/test-show/overrides/priority")
             show = next(
                 p
-                for p in client.get("/api/v1/podcasts", headers=KEY).json()["podcasts"]
+                for p in client.get("/api/v1/podcasts").json()["podcasts"]
                 if p["slug"] == "test-show"
             )
         assert show["priority"] == "med"  # back to the config value
@@ -1342,26 +1299,23 @@ class TestPodcastManagement:
 
     def test_unknown_field_is_rejected(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            response = client.patch(
-                "/api/v1/podcasts/test-show", headers=KEY, json={"slug": "renamed"}
-            )
+            response = client.patch("/api/v1/podcasts/test-show", json={"slug": "renamed"})
         assert response.status_code == 422
 
     def test_no_podcast_can_be_deleted(self, tmp_path, store: MemoryStore) -> None:
         """Shows are disabled, never deleted — a deleted show would leave its
         episodes in the database with no way to explain where they came from."""
         with self._client(tmp_path, store) as client:
-            assert client.delete("/api/v1/podcasts/test-show", headers=KEY).status_code == 405
+            assert client.delete("/api/v1/podcasts/test-show").status_code == 405
             client.post(
                 "/api/v1/podcasts",
-                headers=KEY,
                 json={
                     "slug": "new-show",
                     "name": "New Show",
                     "feed_url": "https://cdn-host.net/feed.xml",
                 },
             )
-            assert client.delete("/api/v1/podcasts/new-show", headers=KEY).status_code == 405
+            assert client.delete("/api/v1/podcasts/new-show").status_code == 405
 
     def test_add_a_console_show(self, tmp_path, store: MemoryStore) -> None:
         new = {
@@ -1370,8 +1324,8 @@ class TestPodcastManagement:
             "feed_url": "https://cdn-host.net/feed.xml",
         }
         with self._client(tmp_path, store) as client:
-            assert client.post("/api/v1/podcasts", headers=KEY, json=new).status_code == 201
-            listed = client.get("/api/v1/podcasts", headers=KEY).json()
+            assert client.post("/api/v1/podcasts", json=new).status_code == 201
+            listed = client.get("/api/v1/podcasts").json()
             added = next(p for p in listed["podcasts"] if p["slug"] == "new-show")
         assert added["source"] == "console"
         assert added["asr_enabled"] is False  # off unless asked for
@@ -1384,13 +1338,13 @@ class TestPodcastManagement:
             make_episode(guid="queued", status=S.NEW),
         )
         with self._client(tmp_path, store) as client:
-            client.patch("/api/v1/podcasts/test-show", headers=KEY, json={"enabled": False})
+            client.patch("/api/v1/podcasts/test-show", json={"enabled": False})
             show = next(
                 p
-                for p in client.get("/api/v1/podcasts", headers=KEY).json()["podcasts"]
+                for p in client.get("/api/v1/podcasts").json()["podcasts"]
                 if p["slug"] == "test-show"
             )
-            episodes = client.get("/api/v1/episodes", headers=KEY).json()
+            episodes = client.get("/api/v1/episodes").json()
 
         assert show["enabled"] is False
         assert show["episodes"] == 2  # history intact
@@ -1402,7 +1356,6 @@ class TestPodcastManagement:
         with self._client(tmp_path, store) as client:
             response = client.post(
                 "/api/v1/podcasts",
-                headers=KEY,
                 json={
                     "slug": "test-show",
                     "name": "Clash",
@@ -1415,7 +1368,6 @@ class TestPodcastManagement:
         with self._client(tmp_path, store) as client:
             response = client.post(
                 "/api/v1/podcasts",
-                headers=KEY,
                 json={"slug": "bad", "name": "Bad", "feed_url": "file:///etc/passwd"},
             )
         assert response.status_code == 422
@@ -1427,7 +1379,6 @@ class TestPodcastManagement:
         with self._client(tmp_path, store) as client:
             response = client.post(
                 "/api/v1/podcasts",
-                headers=KEY,
                 json={
                     "slug": "selfhosted",
                     "name": "Self hosted",
@@ -1456,7 +1407,7 @@ class TestEpisodePaging:
     def test_total_is_the_whole_result_set(self, tmp_path, store: MemoryStore) -> None:
         self._seed(store, 120)
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/episodes?limit=50", headers=KEY).json()
+            body = client.get("/api/v1/episodes?limit=50").json()
         assert body["count"] == 50  # this page
         assert body["total"] == 120  # everything matching
 
@@ -1465,7 +1416,7 @@ class TestEpisodePaging:
         seen: list[str] = []
         with self._client(tmp_path, store) as client:
             for skip in (0, 50, 100):
-                page = client.get(f"/api/v1/episodes?limit=50&skip={skip}", headers=KEY).json()
+                page = client.get(f"/api/v1/episodes?limit=50&skip={skip}").json()
                 seen += [e["_id"] for e in page["episodes"]]
         assert len(seen) == 120
         assert len(set(seen)) == 120  # no episode appears on two pages
@@ -1474,7 +1425,7 @@ class TestEpisodePaging:
         self._seed(store, 10)
         store.seed(make_episode(guid="other", slug="priority-show"))
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/episodes?podcast=priority-show&limit=50", headers=KEY).json()
+            body = client.get("/api/v1/episodes?podcast=priority-show&limit=50").json()
         assert body["total"] == 1
 
 
@@ -1620,13 +1571,9 @@ class TestSettingsConsole:
     def _client(self, tmp_path, store: MemoryStore) -> TestClient:
         return TestClient(build_app(make_settings(tmp_path), store=store, llm=FakeLLM()))
 
-    def test_requires_the_key(self, tmp_path, store: MemoryStore) -> None:
-        with self._client(tmp_path, store) as client:
-            assert client.get("/api/v1/settings").status_code == 401
-
     def test_reports_the_running_configuration(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/settings", headers=KEY).json()
+            body = client.get("/api/v1/settings").json()
         assert body["tiers"]["tier0"]["primary"]["model"] == "test-small"
         assert body["tiers"]["tier0"]["active_chain"] == ["ollama_chat/test-small"]
         assert body["pipeline"]["digest_threshold"] == 5
@@ -1643,7 +1590,6 @@ class TestSettingsConsole:
         with self._client(tmp_path, store) as client:
             saved = client.put(
                 "/api/v1/settings",
-                headers=KEY,
                 json={
                     "tiers": {
                         "tier0": {
@@ -1662,7 +1608,7 @@ class TestSettingsConsole:
                 },
             )
             assert saved.status_code == 200
-            body = client.get("/api/v1/settings", headers=KEY).json()
+            body = client.get("/api/v1/settings").json()
         stored = body["overrides"]["llm"]["tiers"]["tier0"]["primary"]
         assert stored["max_tokens"] == 900
         # And the tier that did not set one keeps the provider default.
@@ -1679,7 +1625,6 @@ class TestSettingsConsole:
         with self._client(tmp_path, store) as client:
             refused = client.put(
                 "/api/v1/settings",
-                headers=KEY,
                 json={
                     "tiers": {
                         "tier0": {
@@ -1705,7 +1650,6 @@ class TestSettingsConsole:
         with self._client(tmp_path, store) as client:
             client.put(
                 "/api/v1/settings",
-                headers=KEY,
                 json={
                     "tiers": {
                         "tier0": {
@@ -1723,7 +1667,7 @@ class TestSettingsConsole:
                     }
                 },
             )
-            body = client.get("/api/v1/settings", headers=KEY).json()
+            body = client.get("/api/v1/settings").json()
         assert body["overrides"] == {}
 
     def test_the_local_default_is_still_settable(self, tmp_path, store: MemoryStore) -> None:
@@ -1731,7 +1675,6 @@ class TestSettingsConsole:
         with self._client(tmp_path, store) as client:
             saved = client.put(
                 "/api/v1/settings",
-                headers=KEY,
                 json={
                     "tiers": {
                         "tier0": {
@@ -1775,7 +1718,6 @@ class TestSettingsConsole:
         with TestClient(build_app(settings, store=store, llm=FakeLLM())) as client:
             saved = client.put(
                 "/api/v1/settings",
-                headers=KEY,
                 json={
                     "tiers": {
                         "tier0": {
@@ -1829,7 +1771,6 @@ llm:
             )
         )
         monkeypatch.setenv("PODAGENT_CONFIG_FILE", str(path))
-        monkeypatch.setenv("PODAGENT_ADMIN_API_KEY", "test-admin-key")
         settings = load_settings(config_file=path)
         return TestClient(build_app(settings, store=store, llm=FakeLLM()))
 
@@ -1862,7 +1803,7 @@ llm:
         just as well against a boot path that adopts nothing at all."""
         store.seed(self._stored(None))
         with self._from_file(tmp_path, store, monkeypatch) as client:
-            body = client.get("/api/v1/settings", headers=KEY).json()
+            body = client.get("/api/v1/settings").json()
         assert body["tiers"]["tier0"]["primary"]["model"] == "swapped"
 
     def test_a_stored_override_with_a_bad_host_is_not_adopted_at_boot(
@@ -1873,18 +1814,18 @@ llm:
         leaves the service on the file rather than on the override."""
         store.seed(self._stored("http://attacker.example:11434"))
         with self._from_file(tmp_path, store, monkeypatch) as client:
-            body = client.get("/api/v1/settings", headers=KEY).json()
+            body = client.get("/api/v1/settings").json()
         assert body["tiers"]["tier0"]["primary"]["model"] == "test-small"
         assert body["tiers"]["tier0"]["primary"]["api_base"] is None
 
     def test_saving_marks_a_restart_pending(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
             saved = client.put(
-                "/api/v1/settings", headers=KEY, json={"pipeline": {"digest_threshold": 6}}
+                "/api/v1/settings", json={"pipeline": {"digest_threshold": 6}}
             ).json()
             assert saved["pending_restart"] is True
             # The running process is unchanged until it restarts.
-            after = client.get("/api/v1/settings", headers=KEY).json()
+            after = client.get("/api/v1/settings").json()
         assert after["pipeline"]["digest_threshold"] == 5
         assert after["overrides"]["pipeline"]["digest_threshold"] == 6
 
@@ -1898,10 +1839,10 @@ llm:
         as accurate — which is exactly how it was once reported.
         """
         with self._client(tmp_path, store) as client:
-            before = client.get("/api/v1/settings", headers=KEY).json()
+            before = client.get("/api/v1/settings").json()
             assert before["started_at"] is not None
-            client.put("/api/v1/settings", headers=KEY, json={"pipeline": {"digest_threshold": 6}})
-            after = client.get("/api/v1/settings", headers=KEY).json()
+            client.put("/api/v1/settings", json={"pipeline": {"digest_threshold": 6}})
+            after = client.get("/api/v1/settings").json()
 
         assert after["pending_restart"] is True
         # Boot predates the save, so this process cannot be running the change.
@@ -1913,11 +1854,11 @@ llm:
     def test_restarting_clears_the_pending_banner(self, tmp_path, store: MemoryStore) -> None:
         """The second process boots with the overrides, so it marks them applied."""
         with self._client(tmp_path, store) as client:
-            client.put("/api/v1/settings", headers=KEY, json={"pipeline": {"digest_threshold": 6}})
-            first_boot = client.get("/api/v1/settings", headers=KEY).json()["started_at"]
+            client.put("/api/v1/settings", json={"pipeline": {"digest_threshold": 6}})
+            first_boot = client.get("/api/v1/settings").json()["started_at"]
 
         with self._client(tmp_path, store) as client:
-            after = client.get("/api/v1/settings", headers=KEY).json()
+            after = client.get("/api/v1/settings").json()
 
         assert after["started_at"] != first_boot
         assert after["applied_at"] == after["updated_at"]
@@ -1934,19 +1875,17 @@ llm:
         with self._client(tmp_path, store) as client:
             response = client.put(
                 "/api/v1/settings",
-                headers=KEY,
                 json={"pipeline": {"digest_threshold": 9, "top_pick_threshold": 5}},
             )
             assert response.status_code == 400
             assert "top_pick_threshold" in response.json()["detail"]
             # Nothing was persisted.
-            assert client.get("/api/v1/settings", headers=KEY).json()["overrides"] == {}
+            assert client.get("/api/v1/settings").json()["overrides"] == {}
 
     def test_cloud_endpoint_without_a_key_is_rejected(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
             response = client.put(
                 "/api/v1/settings",
-                headers=KEY,
                 json={
                     "tiers": {
                         "tier0": {
@@ -1965,9 +1904,9 @@ llm:
 
     def test_overrides_are_discardable(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            client.put("/api/v1/settings", headers=KEY, json={"pipeline": {"t_rel_low": 3}})
-            client.delete("/api/v1/settings", headers=KEY)
-            body = client.get("/api/v1/settings", headers=KEY).json()
+            client.put("/api/v1/settings", json={"pipeline": {"t_rel_low": 3}})
+            client.delete("/api/v1/settings")
+            body = client.get("/api/v1/settings").json()
         assert body["overrides"] == {}
 
     def test_protected_sections_cannot_be_overridden(self) -> None:
@@ -2015,11 +1954,6 @@ class TestDigestBrowsing:
             }
         )
 
-    def test_endpoints_need_the_key(self, tmp_path, store: MemoryStore) -> None:
-        with self._client(tmp_path, store) as client:
-            assert client.get("/api/v1/digests").status_code == 401
-            assert client.get("/api/v1/digests/2026-W31").status_code == 401
-
     def test_page_is_served_and_self_contained(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
             body = client.get("/admin/digests").text
@@ -2031,7 +1965,7 @@ class TestDigestBrowsing:
         for week in ("2026-W29", "2026-W31", "2026-W30"):
             self._seed(store, tmp_path, week)
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/digests", headers=KEY).json()
+            body = client.get("/api/v1/digests").json()
         assert [d["period_key"] for d in body["digests"]] == ["2026-W31", "2026-W30", "2026-W29"]
         assert body["count"] == 3
 
@@ -2048,7 +1982,7 @@ class TestDigestBrowsing:
         # W29 regenerated just now, so it carries the newest generated_at.
         self._seed(store, tmp_path, "2026-W29", generated_at=iso_now())
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/digests", headers=KEY).json()
+            body = client.get("/api/v1/digests").json()
         assert body["digests"][0]["period_key"] == "2026-W31"
 
     def test_one_digest_returns_metadata_markdown_and_html(
@@ -2056,7 +1990,7 @@ class TestDigestBrowsing:
     ) -> None:
         self._seed(store, tmp_path, "2026-W31", body="# Week 31\n\n**bold**\n")
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/digests/2026-W31", headers=KEY).json()
+            body = client.get("/api/v1/digests/2026-W31").json()
         assert body["period_key"] == "2026-W31"
         assert body["episodes"] == 2
         assert body["frontmatter"]["week"] == "2026-W31"
@@ -2069,12 +2003,12 @@ class TestDigestBrowsing:
         """Digest text descends from LLM output, which descends from feeds."""
         self._seed(store, tmp_path, "2026-W31", body="# Ok\n\n<script>alert(1)</script>\n")
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/digests/2026-W31", headers=KEY).json()
+            body = client.get("/api/v1/digests/2026-W31").json()
         assert "<script" not in body["html"].lower()
 
     def test_unknown_week_is_a_404(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            assert client.get("/api/v1/digests/2026-W99", headers=KEY).status_code == 404
+            assert client.get("/api/v1/digests/2026-W99").status_code == 404
 
     def test_a_deleted_digest_file_is_reported_as_gone(self, tmp_path, store: MemoryStore) -> None:
         """The digest directory belongs to the user, who may prune or move it."""
@@ -2083,7 +2017,7 @@ class TestDigestBrowsing:
             Path(make_settings(tmp_path).output.digest_dir) / "2026/podcast-digest-2026-W31.md"
         ).unlink()
         with self._client(tmp_path, store) as client:
-            response = client.get("/api/v1/digests/2026-W31", headers=KEY)
+            response = client.get("/api/v1/digests/2026-W31")
         assert response.status_code == 410
         assert "no digest file" in response.json()["detail"]
 
@@ -2103,7 +2037,7 @@ class TestDigestBrowsing:
             }
         )
         with self._client(tmp_path, store) as client:
-            response = client.get("/api/v1/digests/2026-W31", headers=KEY)
+            response = client.get("/api/v1/digests/2026-W31")
         assert response.status_code == 410
         assert "hunter2" not in response.text
 
@@ -2111,7 +2045,7 @@ class TestDigestBrowsing:
         self, tmp_path, store: MemoryStore
     ) -> None:
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/digests", headers=KEY).json()
+            body = client.get("/api/v1/digests").json()
         assert body == {"count": 0, "digests": []}
 
 
@@ -2143,28 +2077,23 @@ class TestNarratingADigest:
             }
         )
 
-    def test_it_needs_the_key(self, tmp_path, store: MemoryStore) -> None:
-        self._seed(store)
-        with self._client(tmp_path, store) as client:
-            assert client.post("/api/v1/digests/2026-W31/narrate").status_code == 401
-
     def test_an_unknown_week_is_a_404(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            response = client.post("/api/v1/digests/1999-W01/narrate", headers=KEY)
+            response = client.post("/api/v1/digests/1999-W01/narrate")
         assert response.status_code == 404
 
     def test_it_is_refused_while_speech_is_off(self, tmp_path, store: MemoryStore) -> None:
         """Rather than starting a job that can only fail at the first request."""
         self._seed(store)
         with self._client(tmp_path, store, tts=False) as client:
-            response = client.post("/api/v1/digests/2026-W31/narrate", headers=KEY)
+            response = client.post("/api/v1/digests/2026-W31/narrate")
         assert response.status_code == 409
         assert "disabled" in response.json()["detail"]
 
     def test_a_week_with_nothing_to_read_is_a_409(self, tmp_path, store: MemoryStore) -> None:
         self._seed(store)
         with self._client(tmp_path, store) as client:
-            response = client.post("/api/v1/digests/2026-W31/narrate?wait=true", headers=KEY)
+            response = client.post("/api/v1/digests/2026-W31/narrate?wait=true")
         assert response.status_code == 409
         assert "no summarised episodes" in response.json()["detail"]
 
@@ -2174,7 +2103,7 @@ class TestNarratingADigest:
         """The console hides its button on a run that already has a file."""
         self._seed(store)
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/digests", headers=KEY).json()
+            body = client.get("/api/v1/digests").json()
         assert body["digests"][0]["runs"][0]["narration"] is None
 
 
@@ -2183,12 +2112,6 @@ class TestActivityConsole:
 
     def _client(self, tmp_path, store: MemoryStore) -> TestClient:
         return TestClient(build_app(make_settings(tmp_path), store=store, llm=FakeLLM()))
-
-    def test_endpoints_need_the_key(self, tmp_path, store: MemoryStore) -> None:
-        with self._client(tmp_path, store) as client:
-            assert client.get("/api/v1/logs").status_code == 401
-            assert client.get("/api/v1/runs").status_code == 401
-            assert client.get("/api/v1/runs/last").status_code == 401
 
     def test_page_is_served_and_self_contained(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
@@ -2201,7 +2124,7 @@ class TestActivityConsole:
         from podcast_agent.logbuffer import buffer
 
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/logs?limit=10", headers=KEY).json()
+            body = client.get("/api/v1/logs?limit=10").json()
         assert body["capacity"] == buffer.capacity
         assert isinstance(body["events"], list)
         assert "levels" in body
@@ -2215,7 +2138,7 @@ class TestActivityConsole:
         with self._client(tmp_path, store) as client:
             buffer.clear()
             get_logger("test.api").warning("something_odd", podcast="risky")
-            body = client.get("/api/v1/logs?level=warning&limit=20", headers=KEY).json()
+            body = client.get("/api/v1/logs?level=warning&limit=20").json()
         assert any(e.get("event") == "something_odd" for e in body["events"])
 
     def test_the_text_filter_is_applied_server_side(self, tmp_path, store: MemoryStore) -> None:
@@ -2228,7 +2151,7 @@ class TestActivityConsole:
             buffer.clear()
             get_logger("test.api").info("alpha_event")
             get_logger("test.api").info("beta_event")
-            body = client.get("/api/v1/logs?contains=alpha", headers=KEY).json()
+            body = client.get("/api/v1/logs?contains=alpha").json()
         events = [e.get("event") for e in body["events"]]
         assert "alpha_event" in events
         assert "beta_event" not in events
@@ -2239,7 +2162,7 @@ class TestActivityConsole:
                 {"_id": f"run:r{i}", "type": "run", "job": "ingest", "at": at, "summary": {}}
             )
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/runs", headers=KEY).json()
+            body = client.get("/api/v1/runs").json()
         assert [r["at"] for r in body["runs"]] == [
             "2026-07-30T00:00:00+00:00",
             "2026-07-01T00:00:00+00:00",
@@ -2251,7 +2174,7 @@ class TestActivityConsole:
             {"_id": "run:b", "type": "run", "job": "digest", "at": iso_now(), "summary": {}},
         )
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/runs?job=digest", headers=KEY).json()
+            body = client.get("/api/v1/runs?job=digest").json()
         assert [r["job"] for r in body["runs"]] == ["digest"]
 
     def test_last_run_survives_a_restart(self, tmp_path, store: MemoryStore) -> None:
@@ -2270,7 +2193,7 @@ class TestActivityConsole:
             }
         )
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/runs/last", headers=KEY).json()
+            body = client.get("/api/v1/runs/last").json()
         ingest = body["jobs"]["ingest"]
         assert ingest["at"] == "2026-07-30T09:00:00+00:00"
         assert ingest["summary"]["feeds_polled"] == 14
@@ -2280,15 +2203,15 @@ class TestActivityConsole:
         self, tmp_path, store: MemoryStore
     ) -> None:
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/runs/last", headers=KEY).json()
+            body = client.get("/api/v1/runs/last").json()
         assert set(body["jobs"]) >= {"ingest", "pipeline", "digest", "backfill", "retention"}
         assert all(j["at"] is None for j in body["jobs"].values())
 
     def test_running_a_job_records_it_durably(self, tmp_path, store: MemoryStore) -> None:
         """A run must leave a trace the next process can read."""
         with self._client(tmp_path, store) as client:
-            assert client.post("/api/v1/runs/ingest?wait=true", headers=KEY).status_code == 200
-            body = client.get("/api/v1/runs/last", headers=KEY).json()
+            assert client.post("/api/v1/runs/ingest?wait=true").status_code == 200
+            body = client.get("/api/v1/runs/last").json()
         assert body["jobs"]["ingest"]["at"] is not None
         assert body["jobs"]["ingest"]["this_process"] is True
         assert [d["job"] for d in store.docs_of_type("run")] == ["ingest"]
@@ -2311,7 +2234,7 @@ class TestEpisodesConsole:
             )
         )
         with self._client(tmp_path, store) as client:
-            episodes = client.get("/api/v1/episodes", headers=KEY).json()["episodes"]
+            episodes = client.get("/api/v1/episodes").json()["episodes"]
         assert episodes[0]["podcast_name"]
         assert episodes[0]["podcast_slug"]
 
@@ -2327,10 +2250,8 @@ class TestEpisodesConsole:
             )
         )
         with self._client(tmp_path, store) as client:
-            listed = client.get("/api/v1/episodes", headers=KEY).json()["episodes"][0]
-            detail = client.get(
-                f"/api/v1/episodes/{listed['_id'].split(':', 1)[1]}", headers=KEY
-            ).json()
+            listed = client.get("/api/v1/episodes").json()["episodes"][0]
+            detail = client.get(f"/api/v1/episodes/{listed['_id'].split(':', 1)[1]}").json()
         assert detail["digest_id"] == "digest:2026-W31"
 
     def test_an_unpublished_episode_has_no_digest(self, tmp_path, store: MemoryStore) -> None:
@@ -2343,7 +2264,7 @@ class TestEpisodesConsole:
             )
         )
         with self._client(tmp_path, store) as client:
-            episodes = client.get("/api/v1/episodes", headers=KEY).json()["episodes"]
+            episodes = client.get("/api/v1/episodes").json()["episodes"]
         assert episodes[0]["digest_id"] is None
 
     def test_an_archive_episode_is_not_shown_as_a_weekly_digest(
@@ -2368,7 +2289,7 @@ class TestEpisodesConsole:
             )
         )
         with self._client(tmp_path, store) as client:
-            listed = client.get("/api/v1/episodes", headers=KEY).json()["episodes"][0]
+            listed = client.get("/api/v1/episodes").json()["episodes"][0]
         assert listed["digest_id"] == "archive:test-show:2026-06"
         assert listed["archive_month"] == "2026-06"
 
@@ -2411,7 +2332,7 @@ class TestHistoricalIntakeConsole:
     ) -> None:
         """A podcast is chosen by its name; a slug is an implementation detail."""
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/status", headers=KEY).json()
+            body = client.get("/api/v1/status").json()
         podcasts = body["backfill"]["podcasts"]
         assert podcasts, "no podcasts reported"
         for entry in podcasts:
@@ -2421,7 +2342,7 @@ class TestHistoricalIntakeConsole:
 
     def test_each_podcast_carries_its_own_window(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            bf = client.get("/api/v1/status", headers=KEY).json()["backfill"]
+            bf = client.get("/api/v1/status").json()["backfill"]
         assert bf["window_months_default"] == 12
         assert bf["window_choices"] == [12, 24, 36]
         for entry in bf["podcasts"]:
@@ -2435,12 +2356,10 @@ class TestHistoricalIntakeConsole:
         """The point of making it per podcast."""
         with self._client(tmp_path, store) as client:
             assert (
-                client.patch(
-                    "/api/v1/podcasts/test-show", headers=KEY, json={"backfill_months": 36}
-                ).status_code
+                client.patch("/api/v1/podcasts/test-show", json={"backfill_months": 36}).status_code
                 == 200
             )
-            bf = client.get("/api/v1/status", headers=KEY).json()["backfill"]
+            bf = client.get("/api/v1/status").json()["backfill"]
 
         by_slug = {p["slug"]: p for p in bf["podcasts"]}
         assert by_slug["test-show"]["months"] == 36
@@ -2457,8 +2376,8 @@ class TestHistoricalIntakeConsole:
         self, tmp_path, store: MemoryStore
     ) -> None:
         with self._client(tmp_path, store) as client:
-            client.patch("/api/v1/podcasts/test-show", headers=KEY, json={"backfill_months": 24})
-            podcasts = client.get("/api/v1/podcasts", headers=KEY).json()["podcasts"]
+            client.patch("/api/v1/podcasts/test-show", json={"backfill_months": 24})
+            podcasts = client.get("/api/v1/podcasts").json()["podcasts"]
         by_slug = {p["slug"]: p for p in podcasts}
         assert by_slug["test-show"]["backfill_months"] == 24
         assert by_slug["test-show"]["backfill_months_overridden"] is True
@@ -2473,18 +2392,16 @@ class TestHistoricalIntakeConsole:
     ) -> None:
         """Each step is roughly another year of archive; a typo must not pick it."""
         with self._client(tmp_path, store) as client:
-            response = client.patch(
-                "/api/v1/podcasts/test-show", headers=KEY, json={"backfill_months": months}
-            )
+            response = client.patch("/api/v1/podcasts/test-show", json={"backfill_months": months})
         assert response.status_code == 422
 
     def test_reverting_returns_the_podcast_to_the_default(
         self, tmp_path, store: MemoryStore
     ) -> None:
         with self._client(tmp_path, store) as client:
-            client.patch("/api/v1/podcasts/test-show", headers=KEY, json={"backfill_months": 36})
-            client.delete("/api/v1/podcasts/test-show/overrides/backfill_months", headers=KEY)
-            podcasts = client.get("/api/v1/podcasts", headers=KEY).json()["podcasts"]
+            client.patch("/api/v1/podcasts/test-show", json={"backfill_months": 36})
+            client.delete("/api/v1/podcasts/test-show/overrides/backfill_months")
+            podcasts = client.get("/api/v1/podcasts").json()["podcasts"]
         entry = next(p for p in podcasts if p["slug"] == "test-show")
         assert entry["backfill_months"] == 12
         assert entry["backfill_months_overridden"] is False
@@ -2501,14 +2418,10 @@ class TestRewindEndpoint:
     def _client(self, tmp_path, store: MemoryStore) -> TestClient:
         return TestClient(build_app(make_settings(tmp_path), store=store, llm=FakeLLM()))
 
-    def test_it_needs_the_key(self, tmp_path, store: MemoryStore) -> None:
-        with self._client(tmp_path, store) as client:
-            assert client.post("/api/v1/backfill/rewind?confirm=true").status_code == 401
-
     def test_it_refuses_without_confirmation(self, tmp_path, store: MemoryStore) -> None:
         """It queues hours of local work; a stray click should not start it."""
         with self._client(tmp_path, store) as client:
-            response = client.post("/api/v1/backfill/rewind", headers=KEY)
+            response = client.post("/api/v1/backfill/rewind")
         assert response.status_code == 400
         assert "confirm=true" in response.json()["detail"]
 
@@ -2523,8 +2436,8 @@ class TestRewindEndpoint:
             }
         )
         with self._client(tmp_path, store) as client:
-            body = client.post("/api/v1/backfill/rewind?confirm=true", headers=KEY).json()
-            bf = client.get("/api/v1/status", headers=KEY).json()["backfill"]
+            body = client.post("/api/v1/backfill/rewind?confirm=true").json()
+            bf = client.get("/api/v1/status").json()["backfill"]
         assert body["rewound"] == ["test-show"]
         entry = next(p for p in bf["podcasts"] if p["slug"] == "test-show")
         assert entry["cursor"] is None
@@ -2546,7 +2459,7 @@ class TestSpeechSettings:
 
     def test_the_current_voice_is_reported(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/settings", headers=KEY).json()
+            body = client.get("/api/v1/settings").json()
         assert body["tts"]["enabled"] is False
         assert body["tts"]["voice"]
         assert "tts" in body["editable_sections"]
@@ -2554,24 +2467,20 @@ class TestSpeechSettings:
     def test_the_address_is_reported_but_not_editable(self, tmp_path, store: MemoryStore) -> None:
         """Which machine synthesises is deployment topology, like asr.remote_url."""
         with self._client(tmp_path, store, enabled=True, base_url="http://mac.lan:8880") as client:
-            body = client.get("/api/v1/settings", headers=KEY).json()
+            body = client.get("/api/v1/settings").json()
         assert body["tts_fixed"]["base_url"] == "http://mac.lan:8880"
         assert "base_url" not in body["tts"]
 
         with self._client(tmp_path, store) as client:
-            refused = client.put(
-                "/api/v1/settings", headers=KEY, json={"tts": {"base_url": "http://elsewhere"}}
-            )
+            refused = client.put("/api/v1/settings", json={"tts": {"base_url": "http://elsewhere"}})
         assert refused.status_code == 400
         assert "not overridable" in refused.json()["detail"]
 
     def test_the_voice_can_be_changed(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            saved = client.put(
-                "/api/v1/settings", headers=KEY, json={"tts": {"voice": "bm_george"}}
-            )
+            saved = client.put("/api/v1/settings", json={"tts": {"voice": "bm_george"}})
             assert saved.status_code == 200, saved.text
-            body = client.get("/api/v1/settings", headers=KEY).json()
+            body = client.get("/api/v1/settings").json()
         assert body["overrides"]["tts"]["voice"] == "bm_george"
 
     def test_enabling_it_with_nowhere_to_send_it_is_refused(
@@ -2579,7 +2488,7 @@ class TestSpeechSettings:
     ) -> None:
         """Otherwise the failure arrives at the first hourly fire, in a log."""
         with self._client(tmp_path, store) as client:
-            response = client.put("/api/v1/settings", headers=KEY, json={"tts": {"enabled": True}})
+            response = client.put("/api/v1/settings", json={"tts": {"enabled": True}})
         assert response.status_code == 400
         assert "base_url" in response.text
 
@@ -2602,7 +2511,7 @@ class TestASRSettings:
 
     def test_the_current_asr_configuration_is_reported(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/settings", headers=KEY).json()
+            body = client.get("/api/v1/settings").json()
         assert body["asr"]["backend"] == "local"
         assert body["asr"]["model"]
         assert body["asr"]["device"]
@@ -2613,7 +2522,7 @@ class TestASRSettings:
     ) -> None:
         """Size and concurrency limits guard the host, not a preference."""
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/settings", headers=KEY).json()
+            body = client.get("/api/v1/settings").json()
         assert body["asr_fixed"]["max_audio_mb"]
         assert "max_audio_mb" not in body["asr"]
         assert "asr_concurrency" not in body["asr"]
@@ -2623,16 +2532,14 @@ class TestASRSettings:
     ) -> None:
         """Configurable on an install that cannot actually transcribe."""
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/settings", headers=KEY).json()
+            body = client.get("/api/v1/settings").json()
         assert isinstance(body["asr_installed"], bool)
 
     def test_the_model_can_be_changed(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            response = client.put(
-                "/api/v1/settings", headers=KEY, json={"asr": {"model": "medium.en"}}
-            )
+            response = client.put("/api/v1/settings", json={"asr": {"model": "medium.en"}})
             assert response.status_code == 200, response.text
-            body = client.get("/api/v1/settings", headers=KEY).json()
+            body = client.get("/api/v1/settings").json()
         assert body["overrides"]["asr"]["model"] == "medium.en"
         assert body["pending_restart"] is True
 
@@ -2641,9 +2548,7 @@ class TestASRSettings:
     ) -> None:
         """`remote` without a URL fails ASRConfig's own validator."""
         with self._client(tmp_path, store) as client:
-            response = client.put(
-                "/api/v1/settings", headers=KEY, json={"asr": {"backend": "remote"}}
-            )
+            response = client.put("/api/v1/settings", json={"asr": {"backend": "remote"}})
         assert response.status_code == 400
         assert "remote_url" in response.text
 
@@ -2655,9 +2560,7 @@ class TestASRSettings:
         tested.
         """
         with self._client(tmp_path, store) as client:
-            response = client.put(
-                "/api/v1/settings", headers=KEY, json={"asr": {"max_audio_mb": 500}}
-            )
+            response = client.put("/api/v1/settings", json={"asr": {"max_audio_mb": 500}})
         assert response.status_code == 400
         assert "not overridable" in response.json()["detail"]
 
@@ -2808,8 +2711,8 @@ class TestReadingASpecificRun:
     def test_each_run_returns_its_own_file(self, tmp_path, store: MemoryStore) -> None:
         self._seed_two_runs(store, tmp_path)
         with self._client(tmp_path, store) as client:
-            first = client.get("/api/v1/digests/2026-W31?run=1", headers=KEY).json()
-            second = client.get("/api/v1/digests/2026-W31?run=2", headers=KEY).json()
+            first = client.get("/api/v1/digests/2026-W31?run=1").json()
+            second = client.get("/api/v1/digests/2026-W31?run=2").json()
         assert "First run" in first["markdown"]
         assert "Second run" in second["markdown"]
         assert first["file_path"] != second["file_path"]
@@ -2818,7 +2721,7 @@ class TestReadingASpecificRun:
         """They are two digests, not two versions of one."""
         self._seed_two_runs(store, tmp_path)
         with self._client(tmp_path, store) as client:
-            first = client.get("/api/v1/digests/2026-W31?run=1", headers=KEY).json()
+            first = client.get("/api/v1/digests/2026-W31?run=1").json()
         assert first["from"].startswith("2026-07-23")
         assert first["episodes"] == 2
         assert first["run"] == 1
@@ -2826,21 +2729,21 @@ class TestReadingASpecificRun:
     def test_no_run_given_returns_the_most_recent(self, tmp_path, store: MemoryStore) -> None:
         self._seed_two_runs(store, tmp_path)
         with self._client(tmp_path, store) as client:
-            latest = client.get("/api/v1/digests/2026-W31", headers=KEY).json()
+            latest = client.get("/api/v1/digests/2026-W31").json()
         assert "Second run" in latest["markdown"]
         assert latest["run"] == 2
 
     def test_a_run_that_does_not_exist_is_a_404(self, tmp_path, store: MemoryStore) -> None:
         self._seed_two_runs(store, tmp_path)
         with self._client(tmp_path, store) as client:
-            response = client.get("/api/v1/digests/2026-W31?run=9", headers=KEY)
+            response = client.get("/api/v1/digests/2026-W31?run=9")
         assert response.status_code == 404
         assert "2 run(s)" in response.json()["detail"]
 
     def test_the_listing_reports_every_run(self, tmp_path, store: MemoryStore) -> None:
         self._seed_two_runs(store, tmp_path)
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/digests", headers=KEY).json()
+            body = client.get("/api/v1/digests").json()
         runs = body["digests"][0]["runs"]
         assert [r["run"] for r in runs] == [1, 2]
         assert runs[0]["episodes"] == 2 and runs[1]["episodes"] == 1
@@ -2871,9 +2774,7 @@ class TestWhatIsBlockingTheArchive:
             )
         )
         with self._client(tmp_path, store) as client:
-            waiting = client.get("/api/v1/status", headers=KEY).json()["backfill"][
-                "waiting_on_recent"
-            ]
+            waiting = client.get("/api/v1/status").json()["backfill"]["waiting_on_recent"]
         entry = waiting["episodes"][0]
         assert entry["status"] == "TRANSCRIPT_FAILED"
         assert "summarised from its description" in entry["next_step"]
@@ -2888,9 +2789,7 @@ class TestWhatIsBlockingTheArchive:
         """Whatever holds the archive back, the page can say why."""
         store.seed(make_episode(guid="x", title="X", status=status, published_at=datetime.now(UTC)))
         with self._client(tmp_path, store) as client:
-            waiting = client.get("/api/v1/status", headers=KEY).json()["backfill"][
-                "waiting_on_recent"
-            ]
+            waiting = client.get("/api/v1/status").json()["backfill"]["waiting_on_recent"]
         entry = waiting["episodes"][0]
         assert entry["next_step"] != "waiting", f"{status.value} has no explanation"
 
@@ -2911,9 +2810,7 @@ class TestWhatIsBlockingTheArchive:
             )
         )
         with self._client(tmp_path, store) as client:
-            waiting = client.get("/api/v1/status", headers=KEY).json()["backfill"][
-                "waiting_on_recent"
-            ]
+            waiting = client.get("/api/v1/status").json()["backfill"]["waiting_on_recent"]
         assert waiting["blocked"] is True
 
     def test_a_settled_episode_does_not_block(self, tmp_path, store: MemoryStore) -> None:
@@ -2926,9 +2823,7 @@ class TestWhatIsBlockingTheArchive:
             )
         )
         with self._client(tmp_path, store) as client:
-            waiting = client.get("/api/v1/status", headers=KEY).json()["backfill"][
-                "waiting_on_recent"
-            ]
+            waiting = client.get("/api/v1/status").json()["backfill"]["waiting_on_recent"]
         assert waiting["blocked"] is False
 
 
@@ -2957,7 +2852,7 @@ class TestDatabaseUnavailable:
         )
         with client:
             store.failing = True
-            response = client.get("/api/v1/episodes", headers=KEY)
+            response = client.get("/api/v1/episodes")
         assert response.status_code == 503
         assert "database unavailable" in response.json()["detail"]
 
@@ -3003,7 +2898,7 @@ class TestQueueSaysWhatMovesIt:
         store.seed(make_episode(guid="r", status=S.NEW, published_at=datetime.now(UTC)))
 
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/status", headers=KEY).json()
+            body = client.get("/api/v1/status").json()
 
         assert body["queue_depths"]["triage"] == 4
         assert body["queue_depths_routine"]["triage"] == 1
@@ -3016,7 +2911,7 @@ class TestQueueSaysWhatMovesIt:
             )
         )
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/status", headers=KEY).json()
+            body = client.get("/api/v1/status").json()
 
         assert body["queue_depths"]["dispatch"] == 1
         assert body["queue_depths_routine"]["dispatch"] == 0
@@ -3052,15 +2947,11 @@ class TestStoredWarnings:
             }
         )
 
-    def test_it_needs_the_key(self, tmp_path, store: MemoryStore) -> None:
-        with self._client(tmp_path, store) as client:
-            assert client.get("/api/v1/logs/stored").status_code == 401
-
     def test_stored_warnings_survive_a_restart(self, tmp_path, store: MemoryStore) -> None:
         """The whole point: the in-memory tail is empty after a restart."""
         self._seed(store, event="scheduler.job_failed", level="error")
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/logs/stored", headers=KEY).json()
+            body = client.get("/api/v1/logs/stored").json()
         assert [e["event"] for e in body["events"]] == ["scheduler.job_failed"]
         assert body["retention_days"] == 30
 
@@ -3068,34 +2959,34 @@ class TestStoredWarnings:
         self._seed(store, event="older", at="2026-07-01T00:00:00+00:00")
         self._seed(store, event="newer", at="2026-07-30T00:00:00+00:00")
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/logs/stored", headers=KEY).json()
+            body = client.get("/api/v1/logs/stored").json()
         assert [e["event"] for e in body["events"]] == ["newer", "older"]
 
     def test_it_can_be_filtered_by_level(self, tmp_path, store: MemoryStore) -> None:
         self._seed(store, event="a_warning", level="warning")
         self._seed(store, event="an_error", level="error")
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/logs/stored?level=error", headers=KEY).json()
+            body = client.get("/api/v1/logs/stored?level=error").json()
         assert [e["event"] for e in body["events"]] == ["an_error"]
 
     def test_it_can_be_filtered_by_event_name(self, tmp_path, store: MemoryStore) -> None:
         self._seed(store, event="couchdb.request_retry")
         self._seed(store, event="transcript.attempt_failed")
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/logs/stored?contains=couchdb", headers=KEY).json()
+            body = client.get("/api/v1/logs/stored?contains=couchdb").json()
         assert [e["event"] for e in body["events"]] == ["couchdb.request_retry"]
 
     def test_internal_document_fields_are_not_exposed(self, tmp_path, store: MemoryStore) -> None:
         self._seed(store)
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/logs/stored", headers=KEY).json()
+            body = client.get("/api/v1/logs/stored").json()
         entry = body["events"][0]
         assert "_id" not in entry and "_rev" not in entry and "type" not in entry
 
     def test_nothing_stored_is_not_an_error(self, tmp_path, store: MemoryStore) -> None:
         """The empty case is the good outcome, not a failure."""
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/logs/stored", headers=KEY).json()
+            body = client.get("/api/v1/logs/stored").json()
         assert body["count"] == 0
         assert body["events"] == []
 
@@ -3136,7 +3027,7 @@ class TestScoreFilter:
     def test_the_view_reports_the_score_the_table_shows(self, tmp_path, store: MemoryStore) -> None:
         self._seed(store, "summarised", final=8, guess=5)
         with self._client(tmp_path, store) as client:
-            entry = client.get("/api/v1/episodes", headers=KEY).json()["episodes"][0]
+            entry = client.get("/api/v1/episodes").json()["episodes"][0]
         assert entry["score"] == 8
         assert entry["score_provisional"] is False
 
@@ -3146,7 +3037,7 @@ class TestScoreFilter:
         """Never summarised, so the guess is the only number it has."""
         self._seed(store, "greyzone", guess=4)
         with self._client(tmp_path, store) as client:
-            entry = client.get("/api/v1/episodes", headers=KEY).json()["episodes"][0]
+            entry = client.get("/api/v1/episodes").json()["episodes"][0]
         assert entry["score"] == 4
         assert entry["score_provisional"] is True
 
@@ -3154,7 +3045,7 @@ class TestScoreFilter:
         """The case an `$or` selector would get wrong."""
         self._seed(store, "overrated", final=3, guess=9)
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/episodes?min_score=7", headers=KEY).json()
+            body = client.get("/api/v1/episodes?min_score=7").json()
         assert body["total"] == 0, "matched on the triage guess it later disproved"
 
     def test_it_filters_on_the_effective_score(self, tmp_path, store: MemoryStore) -> None:
@@ -3162,7 +3053,7 @@ class TestScoreFilter:
         self._seed(store, "mid", final=6)
         self._seed(store, "guessed-high", guess=8)
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/episodes?min_score=7", headers=KEY).json()
+            body = client.get("/api/v1/episodes?min_score=7").json()
         assert {e["title"] for e in body["episodes"]} == {"high", "guessed-high"}
         assert body["total"] == 2
 
@@ -3171,7 +3062,7 @@ class TestScoreFilter:
             make_episode(guid="raw", title="raw", status=S.NEW, published_at=datetime.now(UTC))
         )
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/episodes?min_score=1", headers=KEY).json()
+            body = client.get("/api/v1/episodes?min_score=1").json()
         assert body["total"] == 0
 
     def test_it_combines_with_the_other_filters(self, tmp_path, store: MemoryStore) -> None:
@@ -3187,15 +3078,15 @@ class TestScoreFilter:
             )
         )
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/episodes?min_score=7&podcast=test-show", headers=KEY).json()
+            body = client.get("/api/v1/episodes?min_score=7&podcast=test-show").json()
         assert {e["title"] for e in body["episodes"]} == {"keep"}
 
     def test_it_pages(self, tmp_path, store: MemoryStore) -> None:
         for i in range(5):
             self._seed(store, f"ep{i}", final=9)
         with self._client(tmp_path, store) as client:
-            first = client.get("/api/v1/episodes?min_score=7&limit=2", headers=KEY).json()
-            second = client.get("/api/v1/episodes?min_score=7&limit=2&skip=2", headers=KEY).json()
+            first = client.get("/api/v1/episodes?min_score=7&limit=2").json()
+            second = client.get("/api/v1/episodes?min_score=7&limit=2&skip=2").json()
         assert first["total"] == second["total"] == 5
         assert len(first["episodes"]) == len(second["episodes"]) == 2
         assert {e["title"] for e in first["episodes"]}.isdisjoint(
@@ -3206,7 +3097,7 @@ class TestScoreFilter:
         """Without a score floor the database still does the paging."""
         self._seed(store, "a", final=9)
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/episodes", headers=KEY).json()
+            body = client.get("/api/v1/episodes").json()
         assert "truncated" not in body
 
     def test_it_filters_the_low_end_too(self, tmp_path, store: MemoryStore) -> None:
@@ -3215,7 +3106,7 @@ class TestScoreFilter:
         self._seed(store, "greyzone", guess=5)
         self._seed(store, "good", final=9)
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/episodes?min_score=0&max_score=3", headers=KEY).json()
+            body = client.get("/api/v1/episodes?min_score=0&max_score=3").json()
         assert {e["title"] for e in body["episodes"]} == {"rejected"}
 
     def test_it_filters_a_band(self, tmp_path, store: MemoryStore) -> None:
@@ -3223,7 +3114,7 @@ class TestScoreFilter:
         self._seed(store, "middling", guess=5)
         self._seed(store, "high", final=9)
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/episodes?min_score=4&max_score=6", headers=KEY).json()
+            body = client.get("/api/v1/episodes?min_score=4&max_score=6").json()
         assert {e["title"] for e in body["episodes"]} == {"middling"}
 
     def test_an_unjudged_episode_is_not_a_low_score(self, tmp_path, store: MemoryStore) -> None:
@@ -3233,7 +3124,7 @@ class TestScoreFilter:
         )
         self._seed(store, "rejected", guess=1)
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/episodes?min_score=0&max_score=3", headers=KEY).json()
+            body = client.get("/api/v1/episodes?min_score=0&max_score=3").json()
         assert {e["title"] for e in body["episodes"]} == {"rejected"}
 
     def test_the_page_offers_the_filter_and_keeps_the_pager_together(
@@ -3294,7 +3185,7 @@ class TestTranscriptionTelemetry:
         """Folding it into `calls` would average minutes against seconds."""
         self._run(store, "a", audio=3600, elapsed=900)
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/telemetry/costs?days=30", headers=KEY).json()
+            body = client.get("/api/v1/telemetry/costs?days=30").json()
         assert body["asr"]["runs"] == 1
         # The model-call totals are untouched by it.
         assert body["totals"]["calls"] == 0
@@ -3303,7 +3194,7 @@ class TestTranscriptionTelemetry:
         """The number that says whether the model and machine suit each other."""
         self._run(store, "a", audio=3600, elapsed=900)
         with self._client(tmp_path, store) as client:
-            asr = client.get("/api/v1/telemetry/costs", headers=KEY).json()["asr"]
+            asr = client.get("/api/v1/telemetry/costs").json()["asr"]
         assert asr["realtime_factor"] == 4.0
         assert asr["audio_hours"] == 1.0
         assert asr["compute_hours"] == 0.25
@@ -3312,7 +3203,7 @@ class TestTranscriptionTelemetry:
         self._run(store, "a", audio=3600, elapsed=900, slug="test-show")
         self._run(store, "b", audio=1800, elapsed=900, slug="priority-show", model="medium.en")
         with self._client(tmp_path, store) as client:
-            asr = client.get("/api/v1/telemetry/costs", headers=KEY).json()["asr"]
+            asr = client.get("/api/v1/telemetry/costs").json()["asr"]
         assert set(asr["by_model"]) == {"small.en on cpu", "medium.en on cpu"}
         assert set(asr["by_podcast"]) == {"test-show", "priority-show"}
         # Slower model, lower factor — the comparison the grouping exists for.
@@ -3320,7 +3211,7 @@ class TestTranscriptionTelemetry:
 
     def test_nothing_transcribed_is_not_an_error(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            asr = client.get("/api/v1/telemetry/costs", headers=KEY).json()["asr"]
+            asr = client.get("/api/v1/telemetry/costs").json()["asr"]
         assert asr["runs"] == 0
         assert asr["realtime_factor"] is None
 
@@ -3346,11 +3237,10 @@ class TestFeedHealthCoversEveryPodcast:
 
     def test_a_console_added_podcast_is_counted(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            before = len(client.get("/api/v1/status", headers=KEY).json()["feeds"])
+            before = len(client.get("/api/v1/status").json()["feeds"])
             assert (
                 client.post(
                     "/api/v1/podcasts",
-                    headers=KEY,
                     json={
                         "slug": "added-here",
                         "name": "Added Here",
@@ -3359,7 +3249,7 @@ class TestFeedHealthCoversEveryPodcast:
                 ).status_code
                 == 201
             )
-            feeds = client.get("/api/v1/status", headers=KEY).json()["feeds"]
+            feeds = client.get("/api/v1/status").json()["feeds"]
 
         assert len(feeds) == before + 1
         assert "added-here" in {f["slug"] for f in feeds}
@@ -3369,7 +3259,6 @@ class TestFeedHealthCoversEveryPodcast:
         with self._client(tmp_path, store) as client:
             client.post(
                 "/api/v1/podcasts",
-                headers=KEY,
                 json={
                     "slug": "broken",
                     "name": "Broken",
@@ -3379,7 +3268,7 @@ class TestFeedHealthCoversEveryPodcast:
             doc = next(d for d in store.docs_of_type("podcast") if d.get("slug") == "broken")
             doc.update({"consecutive_failures": 6, "last_error": "410 Gone"})
             store.seed(doc)
-            feeds = client.get("/api/v1/status", headers=KEY).json()["feeds"]
+            feeds = client.get("/api/v1/status").json()["feeds"]
 
         broken = next(f for f in feeds if f["slug"] == "broken")
         assert broken["consecutive_failures"] == 6
@@ -3387,8 +3276,8 @@ class TestFeedHealthCoversEveryPodcast:
 
     def test_a_disabled_podcast_is_not_counted(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            client.patch("/api/v1/podcasts/test-show", headers=KEY, json={"enabled": False})
-            feeds = client.get("/api/v1/status", headers=KEY).json()["feeds"]
+            client.patch("/api/v1/podcasts/test-show", json={"enabled": False})
+            feeds = client.get("/api/v1/status").json()["feeds"]
         assert "test-show" not in {f["slug"] for f in feeds}
 
 
@@ -3427,7 +3316,7 @@ class TestFilteringByWhetherThereIsASummary:
 
     def _titles(self, tmp_path, store: MemoryStore, query: str) -> set[str]:
         with self._client(tmp_path, store) as client:
-            body = client.get(f"/api/v1/episodes?{query}", headers=KEY).json()
+            body = client.get(f"/api/v1/episodes?{query}").json()
         return {e["title"] for e in body["episodes"]}
 
     def test_it_finds_the_ones_with_a_summary(self, tmp_path, store: MemoryStore) -> None:
@@ -3457,7 +3346,7 @@ class TestFilteringByWhetherThereIsASummary:
         offer pages that render empty."""
         self._seed(store)
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/episodes?summarised=false", headers=KEY).json()
+            body = client.get("/api/v1/episodes?summarised=false").json()
         assert body["total"] == 2
         assert len(body["episodes"]) == 2
 
@@ -3481,7 +3370,7 @@ class TestTheReadyCountMeansWhatItSays:
 
     def _depths(self, tmp_path, store: MemoryStore) -> dict[str, Any]:
         with self._client(tmp_path, store) as client:
-            return client.get("/api/v1/status", headers=KEY).json()
+            return client.get("/api/v1/status").json()
 
     def test_an_unclaimed_episode_is_awaiting_a_digest(self, tmp_path, store: MemoryStore) -> None:
         store.seed(
@@ -3514,91 +3403,3 @@ class TestTheReadyCountMeansWhatItSays:
         depths = self._depths(tmp_path, store)
         assert depths["queue_depths"]["awaiting_digest"] == 0
         assert depths["queue_depths_routine"]["awaiting_digest"] == 0
-
-
-class TestRepeatedFailuresAreThrottled:
-    """Constant-time comparison defeats timing, not volume.
-
-    This listens on the LAN with nothing in front of it, so one compromised
-    device on the network can sit and guess at whatever rate it likes.
-    """
-
-    def _client(self, tmp_path, store: MemoryStore) -> TestClient:
-        return TestClient(build_app(make_settings(tmp_path), store=store, llm=FakeLLM()))
-
-    def test_a_wrong_key_is_still_just_unauthorised_at_first(
-        self, tmp_path, store: MemoryStore
-    ) -> None:
-        with self._client(tmp_path, store) as client:
-            for _ in range(MAX_FAILURES):
-                assert client.get("/api/v1/status", headers={"X-API-Key": "no"}).status_code == 401
-
-    def test_the_attempt_after_the_limit_is_refused(self, tmp_path, store: MemoryStore) -> None:
-        with self._client(tmp_path, store) as client:
-            for _ in range(MAX_FAILURES):
-                client.get("/api/v1/status", headers={"X-API-Key": "no"})
-            refused = client.get("/api/v1/status", headers={"X-API-Key": "no"})
-        assert refused.status_code == 429
-        assert refused.headers["Retry-After"] == str(WINDOW_S)
-
-    def test_the_right_key_is_refused_too_once_throttled(
-        self, tmp_path, store: MemoryStore
-    ) -> None:
-        """Otherwise the throttle is an oracle: it would say "that one was
-        different" about exactly the guess that mattered."""
-        with self._client(tmp_path, store) as client:
-            for _ in range(MAX_FAILURES):
-                client.get("/api/v1/status", headers={"X-API-Key": "no"})
-            assert client.get("/api/v1/status", headers=KEY).status_code == 429
-
-    def test_the_refusal_says_nothing_about_the_key(self, tmp_path, store: MemoryStore) -> None:
-        with self._client(tmp_path, store) as client:
-            for _ in range(MAX_FAILURES):
-                client.get("/api/v1/status", headers={"X-API-Key": "no"})
-            body = client.get("/api/v1/status", headers={"X-API-Key": "no"}).json()
-        assert "too many failed attempts" in body["detail"]
-        for leak in ("close", "correct", "length", "test-admin-key"):
-            assert leak not in body["detail"]
-
-    def test_getting_it_right_clears_the_count(self, tmp_path, store: MemoryStore) -> None:
-        """A person who mistypes twice and then succeeds is not mid-attack."""
-        with self._client(tmp_path, store) as client:
-            for _ in range(MAX_FAILURES - 1):
-                client.get("/api/v1/status", headers={"X-API-Key": "no"})
-            assert client.get("/api/v1/status", headers=KEY).status_code == 200
-            for _ in range(MAX_FAILURES - 1):
-                assert client.get("/api/v1/status", headers={"X-API-Key": "no"}).status_code == 401
-
-    def test_failures_are_forgotten_once_the_window_passes(
-        self, tmp_path, store: MemoryStore, monkeypatch
-    ) -> None:
-        clock = {"t": 1000.0}
-        monkeypatch.setattr(auth, "time", type("_", (), {"monotonic": lambda: clock["t"]}))
-        with self._client(tmp_path, store) as client:
-            for _ in range(MAX_FAILURES):
-                client.get("/api/v1/status", headers={"X-API-Key": "no"})
-            assert client.get("/api/v1/status", headers={"X-API-Key": "no"}).status_code == 429
-            clock["t"] += WINDOW_S + 1
-            assert client.get("/api/v1/status", headers={"X-API-Key": "no"}).status_code == 401
-
-    def test_one_address_does_not_throttle_another(self, tmp_path, store: MemoryStore) -> None:
-        app = build_app(make_settings(tmp_path), store=store, llm=FakeLLM())
-        with TestClient(app, client=("10.0.0.1", 1234)) as noisy:
-            for _ in range(MAX_FAILURES + 1):
-                noisy.get("/api/v1/status", headers={"X-API-Key": "no"})
-        with TestClient(app, client=("10.0.0.2", 1234)) as other:
-            assert other.get("/api/v1/status", headers=KEY).status_code == 200
-
-    def test_health_is_never_throttled(self, tmp_path, store: MemoryStore) -> None:
-        """It has no key to get wrong, and a monitor must not be locked out."""
-        with self._client(tmp_path, store) as client:
-            for _ in range(MAX_FAILURES + 1):
-                client.get("/api/v1/status", headers={"X-API-Key": "no"})
-            assert client.get("/healthz").status_code in (200, 503)
-
-    def test_the_tracked_set_cannot_grow_without_limit(self) -> None:
-        """Its keys are chosen by whoever connects, so it is attacker-sized."""
-        auth.reset_throttle()
-        for i in range(auth.MAX_TRACKED + 50):
-            auth._record_failure(f"10.1.{i // 256}.{i % 256}", 1000.0)
-        assert len(auth._failures) == auth.MAX_TRACKED

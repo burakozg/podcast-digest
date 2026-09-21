@@ -11,7 +11,7 @@ from typing import Annotated, Any, Literal
 
 import feedparser
 import httpx
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Body, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..cadence import cadence_from_dates, describe_cadence
@@ -34,11 +34,10 @@ from ..podcasts import (
 from ..sanitize import slugify
 from ..state import ACTIVE_STATUSES
 from ..utils import podcast_doc_id
-from .auth import require_api_key
 
 log = get_logger(__name__)
 
-router = APIRouter(prefix="/api/v1/podcasts", dependencies=[Depends(require_api_key)])
+router = APIRouter(prefix="/api/v1/podcasts")
 
 #: Entries inspected when probing a feed. Enough to judge transcripts, cheap.
 PROBE_ENTRIES = 25

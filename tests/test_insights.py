@@ -21,7 +21,6 @@ from podcast_agent.state import EpisodeStatus
 from podcast_agent.utils import podcast_doc_id
 
 S = EpisodeStatus
-KEY = {"X-API-Key": "test-admin-key"}
 RECENT = datetime.now(UTC) - timedelta(days=5)
 
 
@@ -390,23 +389,17 @@ class TestApi:
     def _client(self, tmp_path, store: MemoryStore) -> TestClient:
         return TestClient(build_app(make_settings(tmp_path), store=store, llm=FakeLLM()))
 
-    def test_it_needs_the_key(self, tmp_path, store: MemoryStore) -> None:
-        with self._client(tmp_path, store) as client:
-            assert client.get("/api/v1/insights/precision").status_code == 401
-
     def test_it_reports(self, tmp_path, store: MemoryStore) -> None:
         store.seed(surfaced("a", starred=True))
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/insights/precision", headers=KEY).json()
+            body = client.get("/api/v1/insights/precision").json()
         assert body["totals"]["starred"] == 1
         assert body["min_sample"] == MIN_SAMPLE
 
     def test_the_window_is_a_parameter(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            assert (
-                client.get("/api/v1/insights/precision?days=30", headers=KEY).json()["days"] == 30
-            )
+            assert client.get("/api/v1/insights/precision?days=30").json()["days"] == 30
 
     def test_an_absurd_window_is_refused(self, tmp_path, store: MemoryStore) -> None:
         with self._client(tmp_path, store) as client:
-            assert client.get("/api/v1/insights/precision?days=1", headers=KEY).status_code == 422
+            assert client.get("/api/v1/insights/precision?days=1").status_code == 422

@@ -328,15 +328,18 @@ interest_profile:
 
 - **pydantic-settings**, layered: `config.yaml` (mounted, non-secret) + environment variables (secrets) + sensible defaults. Env prefix `PODAGENT_`.
 - `config.yaml` sections: `podcasts` (list: slug, feed_url, priority, always_escalate, transcript_selector?), `interest_profile`, `scheduler` (cron expressions, timezone `Europe/Stockholm`), `pipeline` (thresholds, retries, caps), `llm` (tier groups, fallbacks, timeouts), `asr` (model, compute type, concurrency, size cap, keep_audio), `output` (digest dir, episode_notes flag), `couchdb` (url, db name), `api` (bind host/port, api key env ref), `logging` (level, format).
-- Secrets (**env only, never in YAML, never logged**): `PODAGENT_OPENROUTER_API_KEY`, `PODAGENT_COUCHDB_PASSWORD`, `PODAGENT_ADMIN_API_KEY`.
+- Secrets (**env only, never in YAML, never logged**): `PODAGENT_OPENROUTER_API_KEY`, `PODAGENT_COUCHDB_PASSWORD`.
 - Config is validated at startup; invalid config = crash loudly with a clear message, do not start half-configured.
 - Hot reload NOT required (restart container to apply config).
 
 ---
 
-## 9. API Surface (FastAPI, LAN-only)
+## 9. API Surface (FastAPI)
 
-All under `/api/v1`, all except `/healthz` require header `X-API-Key: <PODAGENT_ADMIN_API_KEY>` (constant-time compare).
+All under `/api/v1`. The app implements no credential check of its own: the
+container is reachable only through the reverse proxy in front of it, on an
+internal Docker network with no LAN address or published port, and the proxy
+authenticates the caller with a session cookie before a request ever gets here.
 
 | Method & path | Purpose |
 |---|---|

@@ -29,7 +29,6 @@ from podcast_agent.state import EpisodeStatus
 from podcast_agent.utils import iso, parse_iso, utcnow
 
 S = EpisodeStatus
-KEY = {"X-API-Key": "test-admin-key"}
 
 
 def marked(
@@ -226,14 +225,10 @@ class TestApi:
     def _client(self, tmp_path, store: MemoryStore) -> TestClient:
         return TestClient(build_app(make_settings(tmp_path), store=store, llm=FakeLLM()))
 
-    def test_it_needs_the_key(self, tmp_path, store: MemoryStore) -> None:
-        with self._client(tmp_path, store) as client:
-            assert client.post("/api/v1/signals/export").status_code == 401
-
     def test_it_reports_what_it_wrote(self, tmp_path, store: MemoryStore) -> None:
         store.seed(marked("liked", starred=True), marked("bad", verdict="over"))
         with self._client(tmp_path, store) as client:
-            body = client.post("/api/v1/signals/export", headers=KEY).json()
+            body = client.post("/api/v1/signals/export").json()
         assert body["written"].startswith(f"{OUTPUT_DIR}/")
         assert body["starred"] == 1
         assert body["not_worth_it"] == 1
@@ -241,6 +236,6 @@ class TestApi:
     def test_forcing_it_twice_does_not_repeat_a_mark(self, tmp_path, store: MemoryStore) -> None:
         store.seed(marked("liked", starred=True))
         with self._client(tmp_path, store) as client:
-            client.post("/api/v1/signals/export", headers=KEY)
-            again = client.post("/api/v1/signals/export", headers=KEY).json()
+            client.post("/api/v1/signals/export")
+            again = client.post("/api/v1/signals/export").json()
         assert again["marks"] == 0

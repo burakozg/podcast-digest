@@ -39,7 +39,6 @@ docker run -d --name couchdb-podcast-local -p 5984:5984 \
 #    prefix — docker-compose does that mapping for you, nothing does it here.
 cp .env.example .env
 printf 'PODAGENT_COUCHDB_PASSWORD=%s\n' "$COUCHDB_DEV_PASSWORD" >> .env
-# set PODAGENT_ADMIN_API_KEY in .env:  openssl rand -hex 32
 
 # 3. Dependencies (uv fetches Python 3.12 itself)
 uv sync --all-extras
@@ -103,13 +102,12 @@ failures that have nothing to do with the pipeline.
 Then, in another shell:
 
 ```bash
-export KEY=$(grep '^PODAGENT_ADMIN_API_KEY=' .env | cut -d= -f2)
 export H="http://127.0.0.1:8080"
 
 curl -sS $H/healthz | jq
-curl -sS -X POST -H "X-API-Key: $KEY" "$H/api/v1/runs/ingest?wait=true" | jq .result
-curl -sS -X POST -H "X-API-Key: $KEY" "$H/api/v1/runs/pipeline?wait=true" | jq .result
-curl -sS -X POST -H "X-API-Key: $KEY" "$H/api/v1/runs/digest" | jq .result
+curl -sS -X POST "$H/api/v1/runs/ingest?wait=true" | jq .result
+curl -sS -X POST "$H/api/v1/runs/pipeline?wait=true" | jq .result
+curl -sS -X POST "$H/api/v1/runs/digest" | jq .result
 open data/digests/*/*.md
 ```
 

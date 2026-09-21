@@ -34,7 +34,6 @@ from podcast_agent.migrate import seed_topic_note_names
 from podcast_agent.state import EpisodeStatus
 
 S = EpisodeStatus
-KEY = {"X-API-Key": "test-admin-key"}
 
 
 def episode(guid: str, entities: list[str], *, month: int = 6, show: str = "Test Show"):
@@ -277,14 +276,10 @@ class TestApi:
             episode("b", ["volt typhoon"], show="B"),
         )
 
-    def test_it_needs_the_key(self, tmp_path, store: MemoryStore) -> None:
-        with self._client(tmp_path, store) as client:
-            assert client.get("/api/v1/entities").status_code == 401
-
     def test_listing_ranks_by_mentions(self, tmp_path, store: MemoryStore) -> None:
         self._seed(store)
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/entities", headers=KEY).json()
+            body = client.get("/api/v1/entities").json()
         assert body["entities"][0]["name"] == "Volt Typhoon"
         assert body["entities"][0]["show_count"] == 2
 
@@ -293,24 +288,24 @@ class TestApi:
     ) -> None:
         self._seed(store)
         with self._client(tmp_path, store) as client:
-            body = client.get("/api/v1/entities/Volt%20Typhoon", headers=KEY).json()
+            body = client.get("/api/v1/entities/Volt%20Typhoon").json()
         assert len(body["episodes"]) == 2
         assert body["timeline"]
 
     def test_an_entity_can_be_looked_up_by_any_spelling(self, tmp_path, store: MemoryStore) -> None:
         self._seed(store)
         with self._client(tmp_path, store) as client:
-            assert client.get("/api/v1/entities/volt%20typhoon", headers=KEY).status_code == 200
+            assert client.get("/api/v1/entities/volt%20typhoon").status_code == 200
 
     def test_an_unknown_entity_is_404(self, tmp_path, store: MemoryStore) -> None:
         self._seed(store)
         with self._client(tmp_path, store) as client:
-            assert client.get("/api/v1/entities/nothing", headers=KEY).status_code == 404
+            assert client.get("/api/v1/entities/nothing").status_code == 404
 
     def test_notes_can_be_written_from_the_api(self, tmp_path, store: MemoryStore) -> None:
         self._seed(store)
         with self._client(tmp_path, store) as client:
-            body = client.post("/api/v1/entities/notes?min_mentions=2", headers=KEY).json()
+            body = client.post("/api/v1/entities/notes?min_mentions=2").json()
         assert body["written"] == 1
 
     def test_the_default_threshold_is_the_configured_one(
@@ -326,7 +321,7 @@ class TestApi:
         """
         self._seed(store)
         with self._client(tmp_path, store) as client:
-            body = client.post("/api/v1/entities/notes", headers=KEY).json()
+            body = client.post("/api/v1/entities/notes").json()
         assert body["min_mentions"] == 8
         assert body["written"] == 0
 

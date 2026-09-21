@@ -37,7 +37,6 @@ from podcast_agent.vault import (
     to_vault_markdown,
 )
 
-KEY = {"X-API-Key": "test-admin-key"}
 COUCH = "http://vault-couch.lan:5984"
 DB = "myvault"
 
@@ -391,7 +390,7 @@ class TestTheSyncEndpoint:
         self, tmp_path: Path, store: MemoryStore
     ) -> None:
         with self._client(tmp_path, store) as client:
-            response = client.post("/api/v1/vault/sync", headers=KEY)
+            response = client.post("/api/v1/vault/sync")
         assert response.status_code == 409
         assert "vault.enabled" in response.json()["detail"]
 
@@ -426,7 +425,7 @@ class TestTheSyncEndpoint:
             couchdb_url=COUCH,
             db=DB,
         ) as client:
-            response = client.post("/api/v1/vault/sync", headers=KEY)
+            response = client.post("/api/v1/vault/sync")
 
         assert response.status_code == 200
         body = response.json()
@@ -456,7 +455,7 @@ class TestTheSyncEndpoint:
             couchdb_url=COUCH,
             db=DB,
         ) as client:
-            response = client.post("/api/v1/vault/sync", headers=KEY)
+            response = client.post("/api/v1/vault/sync")
 
         assert response.status_code == 503
         assert "projected 0 of 1" in response.json()["detail"]
@@ -747,7 +746,7 @@ class TestTheThresholdIsOneNumber:
         )
         app = build_app(settings, store=store, llm=FakeLLM())
         with TestClient(app) as client:
-            body = client.post("/api/v1/entities/notes", headers=KEY).json()
+            body = client.post("/api/v1/entities/notes").json()
         assert body["min_mentions"] == 9
 
     def test_an_explicit_value_still_wins(self, tmp_path: Path, store: MemoryStore) -> None:
@@ -758,7 +757,7 @@ class TestTheThresholdIsOneNumber:
         )
         app = build_app(settings, store=store, llm=FakeLLM())
         with TestClient(app) as client:
-            body = client.post("/api/v1/entities/notes?min_mentions=3", headers=KEY).json()
+            body = client.post("/api/v1/entities/notes?min_mentions=3").json()
         assert body["min_mentions"] == 3
 
     def test_it_is_tunable_from_the_console(self) -> None:

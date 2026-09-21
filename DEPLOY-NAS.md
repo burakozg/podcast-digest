@@ -9,11 +9,16 @@ is now cloud (OpenRouter is the sole provider for every tier), so nothing about 
 workload requires the Mac.
 
 ```
-                     ┌─────────────────────────────────────────┐
- LAN ── 10.0.0.2 ──│ podcast-agent   (console :8080)         │
-                     │      │ internal bridge                  │
-                     │ couchdb-podcast (no LAN address at all) │
-                     └─────────────────────────────────────────┘
+        podcast-digest.servers.zou (Traefik, forwardAuth login)
+                     │
+              homelab-internal
+                     │
+                     ▼
+        ┌─────────────────────────────────────────┐
+        │ podcast-agent   (loopback :8080 only)    │
+        │      │ internal bridge                   │
+        │ couchdb-podcast (no LAN address at all)  │
+        └─────────────────────────────────────────┘
         /share/Container/podcast-digest/{couchdb,work,digests,backups}
 ```
 
@@ -31,8 +36,7 @@ Each of these cost something to find out. They are why `docker-compose.nas.yml` 
 | **No `python3`** | `scripts/backup.sh` and `scripts/restore.sh` both need it. The restore is therefore driven **from the Mac**; the nightly backup uses `qnap/backup-nas.sh`, which verifies with curl/gzip/sed instead. |
 | **`/bin/bash` is a symlink to `sh`** | Anything run on the NAS host must be POSIX. No `pipefail`, no `[[ ]]`. |
 | **`docker` is not on `PATH`** | Only wired in for interactive logins. Scripts use the full path `/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker`. |
-| **qnet has no embedded DNS** | Service names do not resolve on it, and container-to-container traffic over it has been observed to fail outright. The agent keeps the `internal` bridge for reaching CouchDB, and uses qnet only for its LAN address. |
-| **qnet does NOT isolate the host** | Unlike standard macvlan, the NAS host reaches `10.0.0.2:8080` fine (verified: HTTP 200). Both that and the published `127.0.0.1:8080` work from the NAS, so either is usable for host-side checks. |
+| **qnet has no embedded DNS** | Service names do not resolve on it, and container-to-container traffic between two qnet containers has been observed to fail outright. It's why the agent and CouchDB share the plain `internal` bridge for `couchdb.url` rather than any qnet-adjacent network — true regardless of whatever network the agent joins for its LAN-facing hop (today, `homelab-internal`, via Traefik). |
 | **Memory** | ~7.8 GB total, ~3 GB genuinely free, shared with Home Assistant, traefik, two other digest services and the wyoming voice stack. Hence `small.en` ASR and a 2 GB agent limit. |
 
 ---
@@ -84,7 +88,6 @@ Write it directly on the NAS (never commit it):
 
 ```bash
 ssh -p $P $NAS "cat > $APP/.env" <<'EOF'
-PODAGENT_ADMIN_API_KEY=<openssl rand -hex 32>
 COUCHDB_USER=podagent
 COUCHDB_PASSWORD=<openssl rand -hex 24>
 PODAGENT_COUCHDB_PASSWORD=<same as COUCHDB_PASSWORD>
@@ -96,16 +99,11 @@ PODAGENT_OPENROUTER_API_KEY=
 # Digests land inside the app directory, so one backup job captures everything.
 DIGEST_DIR=./digests
 
-# Loopback only. The console's LAN address is the container's own (APP_LAN_IP
-# below); this publish exists so the NAS host itself can reach the API, which
-# it cannot reach directly, and it keeps working if the qnet address is ever
-# removed.
+# Loopback only, and superseded anyway: docker-compose.nas.yml hardcodes the
+# agent's published port to 127.0.0.1:8080 rather than reading this. Kept in
+# the template because the portable, non-NAS compose file still honours it
+# (${AGENT_BIND:-8080}:8080), and .env is shared between the two.
 AGENT_BIND=127.0.0.1:8080
-
-# docker-compose.nas.yml's static qnet IP for the agent container -- Compose
-# reads this from .env at parse time (${APP_LAN_IP:-...} substitution), same
-# file, no separate config. Pick a free address on your qnet subnet.
-APP_LAN_IP=10.0.0.2
 
 # PODAGENT_ASR__MODEL is deliberately NOT set here. It once was, to shrink the
 # local whisper footprint on this memory-tight NAS — but ASR runs remotely now
@@ -154,7 +152,7 @@ TTS_URL=http://transcriber.local:8880
 # PODAGENT_VIDEO_DIGEST_API_KEY=
 EOF
 
-ssh -p $P $NAS "grep -c '^[A-Z]' $APP/.env"     # expect 10 assignments
+ssh -p $P $NAS "grep -c '^[A-Z]' $APP/.env"     # expect 9 assignments
 ```
 
 > **You need an OpenRouter API key before this will start.** `config.yaml` puts an
@@ -205,9 +203,8 @@ Skip this section for a fresh install; `initial_lookback_days` will do the right
 ### 1. Record what "correct" looks like, before you change anything
 
 ```bash
-KEY=$(grep -E '^PODAGENT_ADMIN_API_KEY=' .env | cut -d= -f2-)
-curl -fsS -H "X-API-Key: $KEY" http://127.0.0.1:8080/api/v1/status       > backups/before-migration-status.json
-curl -fsS -H "X-API-Key: $KEY" http://127.0.0.1:8080/api/v1/search/status > backups/before-migration-search.json
+curl -fsS http://127.0.0.1:8080/api/v1/status       > backups/before-migration-status.json
+curl -fsS http://127.0.0.1:8080/api/v1/search/status > backups/before-migration-search.json
 jq '.episode_counts, ([.episode_counts[]] | add)' backups/before-migration-status.json
 ```
 
@@ -375,37 +372,27 @@ ssh -p $P $NAS "cd $APP && $D compose logs -f podcast-agent"
 
 ## Verify
 
-Run these from any machine on the **your LAN subnet LAN**, or from the NAS itself — qnet on
-this NAS does not isolate the host the way standard macvlan would, so `10.0.0.2:8080`
-answers there too (verified).
-
-```bash
-export KEY=<admin key> HOST=10.0.0.2:8080
-```
-
-> **Over a VPN this will appear to hang.** The TCP handshake completes and then nothing
-> comes back. The container has its own identity on the LAN and uses the router as its
-> gateway, so its replies only reach a VPN subnet if the router has a route back — and
-> replies to the NAS's own address are not the same path. Test from the LAN, or run the
-> checks over SSH on the NAS against `127.0.0.1:8080`.
+The agent has no LAN address any more, so these run over SSH against its loopback
+publish, `127.0.0.1:8080` — the same one the NAS host itself and `./deploy`'s own
+checks use.
 
 | # | Check | Command |
 |---|---|---|
-| 0 | The LAN address actually attached | `ping -c1 10.0.0.2` |
-| 1 | App is up, CouchDB reachable | `curl -fsS http://$HOST/healthz \| jq` |
-| 2 | Data arrived intact | `curl -fsS -H "X-API-Key: $KEY" http://$HOST/api/v1/status \| jq` — compare with `/tmp/before.json` |
+| 1 | App is up, CouchDB reachable | `ssh -p $P $NAS "curl -fsS http://127.0.0.1:8080/healthz" \| jq` |
+| 2 | Data arrived intact | `ssh -p $P $NAS "curl -fsS http://127.0.0.1:8080/api/v1/status" \| jq` — compare with `/tmp/before.json` |
 | 3 | `config.yaml` won, not an override | see below |
-| 4 | Search rebuilt | `curl -fsS -X POST -H "X-API-Key: $KEY" http://$HOST/api/v1/search/rebuild` |
-| 5 | Mounts are writable | `curl -fsS -X POST -H "X-API-Key: $KEY" "http://$HOST/api/v1/runs/digest?dry_run=true"` |
+| 4 | Search rebuilt | `ssh -p $P $NAS "curl -fsS -X POST http://127.0.0.1:8080/api/v1/search/rebuild"` |
+| 5 | Mounts are writable | `ssh -p $P $NAS 'curl -fsS -X POST "http://127.0.0.1:8080/api/v1/runs/digest?dry_run=true"'` |
 | 6 | State survives a restart | `docker compose restart`, then repeat 1–2 |
 
-Step 0 matters because a qnet address that failed to attach looks exactly like an app that
-did not start, and the two have nothing in common as fixes.
+Browser access goes through Traefik instead, at `http://podcast-digest.servers.zou/admin`
+— every path there, `/admin` included, now requires login, so it answers nothing to a
+bare `curl` and is not a substitute for the checks above.
 
 Step 3 — `active_chain` is what would actually be tried, after any stored override:
 
 ```bash
-curl -fsS -H "X-API-Key: $KEY" "http://$HOST/api/v1/settings" \
+ssh -p $P $NAS "curl -fsS http://127.0.0.1:8080/api/v1/settings" \
   | jq '{chains: (.tiers|map_values(.active_chain)), overrides: .overrides, asr: .asr.model}'
 ```
 
@@ -484,10 +471,9 @@ bad trade. The console reports when a restart is pending.
 |---|---|
 | `exec format error` | Image built for the wrong architecture. `NAS_PLATFORM=linux/amd64`. |
 | Container exits with `FATAL: invalid configuration` | Read the field paths it lists. `extra="forbid"` means a typo'd key is fatal by design. |
-| `/api/v1/*` returns 503 | `PODAGENT_ADMIN_API_KEY` unset. It fails closed on purpose. |
 | Startup refuses: "an openrouter endpoint is active but …" | `PODAGENT_OPENROUTER_API_KEY` is missing from `.env`. It is required as shipped. |
-| Console reachable from the NAS and LAN but not over a VPN | The container has its own LAN identity and uses the router as its gateway, so replies to a VPN subnet depend on the router having a route back. TCP connects, then no response. Use a LAN address, or reach it through the NAS. |
-| Console unreachable from everywhere | `ping 10.0.0.2` first. If that fails the qnet attach failed; if it answers, check the container logs. |
+| `podcast-digest.servers.zou` unreachable, but `ssh ... curl 127.0.0.1:8080/healthz` on the NAS answers | The agent itself is fine — check the container joined `homelab-internal` (`docker network inspect homelab-internal`) and that Traefik's route for it is configured. See homelab-auth. |
+| Console unreachable even on loopback | `docker compose ps` and the container logs — with no LAN address any more there is no separate "attach failed" case to rule out first. |
 | Permission denied writing digests/work | Bind-mount dirs owned by root because Docker created them. Remove, recreate as the SSH user, restart. |
 | `stages_deferred` in a run summary | The tier's whole chain was unreachable — OpenRouter failed. Work stayed queued; nothing is lost. |
 | ASR killed mid-run | Memory. Check `free -m` against the other containers; `small.en` and `asr_concurrency: 1` are already the floor. |

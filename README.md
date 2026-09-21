@@ -89,9 +89,8 @@ after each entry is what adopting it takes on a deployment already running.
 ```bash
 git clone <this repo> && cd podcast-digest
 cp .env.example .env
-openssl rand -hex 32   # → PODAGENT_ADMIN_API_KEY
 openssl rand -hex 24   # → COUCHDB_PASSWORD
-$EDITOR .env           # fill both, add the two model-provider keys below,
+$EDITOR .env           # fill it in, add the two model-provider keys below,
                        # and set DIGEST_DIR to your vault folder
 $EDITOR config.yaml    # tune interest_profile — this drives everything
 
@@ -117,13 +116,12 @@ docker compose exec ollama ollama pull qwen3:32b   # tier1
 Then open the console at `http://<host>:8080/admin`, or kick a first run by hand:
 
 ```bash
-export KEY=$(grep '^PODAGENT_ADMIN_API_KEY=' .env | cut -d= -f2)
 export HOST=127.0.0.1:8080   # or <nas-ip>:8080
 
 curl -fsS "http://$HOST/healthz" | jq
-curl -fsS -X POST -H "X-API-Key: $KEY" "http://$HOST/api/v1/runs/ingest?wait=true" | jq
-curl -fsS -X POST -H "X-API-Key: $KEY" "http://$HOST/api/v1/runs/pipeline?wait=true" | jq
-curl -fsS -X POST -H "X-API-Key: $KEY" "http://$HOST/api/v1/runs/digest?dry_run=true" | jq
+curl -fsS -X POST "http://$HOST/api/v1/runs/ingest?wait=true" | jq
+curl -fsS -X POST "http://$HOST/api/v1/runs/pipeline?wait=true" | jq
+curl -fsS -X POST "http://$HOST/api/v1/runs/digest?dry_run=true" | jq
 ```
 
 On a fresh database only episodes from the last `initial_lookback_days` (default
@@ -236,11 +234,11 @@ schedule are **not** editable here: a typo in a browser should not be able to
 make the service unreachable or unable to find its own database. Discarding
 overrides returns every value to `config.yaml`.
 
-The console pages are served **without** the API key, because a browser
-navigation cannot send a header. They contain no data: each asks for the key,
-holds it in `sessionStorage` for that tab, and every value on screen arrives
-over the normal authenticated endpoints. Treat them like the rest of this
-service — LAN-only, never port-forwarded.
+The console is now gated by a shared reverse-proxy login (see the sibling
+`homelab-auth` project) rather than an app-level API key — the page itself
+carries no credential, and every value on screen arrives over the normal
+endpoints once the browser holds a valid session. Treat it like the rest of
+this service — LAN-only, never port-forwarded.
 
 ### Browsing episodes
 
@@ -258,7 +256,7 @@ reached: with no transcript available the summary is made from the description
 and labelled `description_only`.
 
 ```bash
-curl -fsS -X POST -H "X-API-Key: $KEY" \
+curl -fsS -X POST \
   "http://$HOST/api/v1/episodes/<id>/summarize?allow_asr=false" | jq
 ```
 
@@ -307,7 +305,7 @@ Configure it under `video_digest:` with `PODAGENT_VIDEO_DIGEST_API_KEY` in
 `.env`; leave it disabled and no job is registered at all. It polls hourly, and
 
 ```bash
-curl -fsS -X POST -H "X-API-Key: $KEY" "http://$HOST/api/v1/runs/video-digest" | jq
+curl -fsS -X POST "http://$HOST/api/v1/runs/video-digest" | jq
 ```
 
 pulls now. That returns 409 rather than a cheerful zero when the integration is
@@ -667,7 +665,7 @@ for that provider and is dropped before the request is built.
 Costs and latency per provider/model/tier are recorded for every call:
 
 ```bash
-curl -fsS -H "X-API-Key: $KEY" "http://$HOST/api/v1/telemetry/costs?days=30" | jq
+curl -fsS "http://$HOST/api/v1/telemetry/costs?days=30" | jq
 ```
 
 ---
@@ -860,15 +858,12 @@ calling it twice does not repeat a mark.
 | `GET /api/v1/runs/last` | When each job last ran — survives a restart |
 | `GET /api/v1/telemetry/costs` | LLM cost/latency by provider, model, tier, day |
 | `GET /api/v1/glance` | One-line headline for a small display |
-| `GET /docs` | Swagger UI — behind the same API key |
+| `GET /docs` | Swagger UI |
 
-Everything except `/healthz` and the console pages needs `X-API-Key`, compared in
-constant time. Ten wrong keys from one address within five minutes gets that
-address a `429` until the window drains — constant-time comparison stops timing
-attacks and says nothing about volume. A correct key clears the count, so
-mistyping it twice costs nothing. The counter is in memory only: an
-unauthenticated request must not be able to make the service write to its
-database.
+The app implements no credential check of its own. It is reachable only through
+the reverse proxy in front of it, on an internal Docker network with no LAN
+address or published port — the proxy authenticates the caller with a session
+cookie before a request ever gets here.
 
 **Bind it deliberately.** `api.host` defaults to `0.0.0.0`, which compose scopes
 for you. Running natively — see [RUNNING-ON-MAC.md](RUNNING-ON-MAC.md) — set
@@ -911,7 +906,6 @@ behind `llm.log_llm_io: true` at DEBUG only.
 
 | Symptom | Cause and fix |
 |---|---|
-| `/api/v1/*` returns 503 "not configured" | `PODAGENT_ADMIN_API_KEY` unset. It fails closed on purpose |
 | Container exits with "FATAL: invalid configuration" | Read the listed field paths; `extra="forbid"` means a typo'd key is fatal by design |
 | `stages_deferred: ["triage"]` in a run summary | The tier's whole chain was unreachable — with the shipped cloud chain that means OpenRouter failed (outage, bad key, no credit). Work stayed queued — nothing lost |
 | Episodes stuck in `AWAITING_TRANSCRIPT` | Check `max_transcripts_per_run` against arrival rate, and whether the podcast has `asr_enabled` |
@@ -936,8 +930,8 @@ accident.
 latencies, not generic guesses:
 
 ```bash
-curl -fsS -X POST -H "X-API-Key: $KEY" "http://$HOST/api/v1/runs/backfill?dry_run=true" | jq .result
-curl -fsS -X POST -H "X-API-Key: $KEY" \
+curl -fsS -X POST "http://$HOST/api/v1/runs/backfill?dry_run=true" | jq .result
+curl -fsS -X POST \
   "http://$HOST/api/v1/runs/backfill?dry_run=false&confirm=true" | jq .result
 ```
 
@@ -949,8 +943,8 @@ The walk has a persisted run state, **paused by default**: a scheduled walk neve
 begins just because a config file was deployed.
 
 ```bash
-curl -fsS -X POST -H "X-API-Key: $KEY" "http://$HOST/api/v1/backfill/control?paused=false"  # start
-curl -fsS -X POST -H "X-API-Key: $KEY" "http://$HOST/api/v1/backfill/control?paused=true"   # pause
+curl -fsS -X POST "http://$HOST/api/v1/backfill/control?paused=false"  # start
+curl -fsS -X POST "http://$HOST/api/v1/backfill/control?paused=true"   # pause
 ```
 
 Once started, the `backfill` cron job advances one month-window per podcast per
@@ -1011,7 +1005,7 @@ Re-score them from stored transcripts — Tier-1 tokens only, no re-fetching and
 re-transcription:
 
 ```bash
-curl -fsS -X POST -H "X-API-Key: $KEY" "http://$HOST/api/v1/runs/rescore?limit=50" | jq
+curl -fsS -X POST "http://$HOST/api/v1/runs/rescore?limit=50" | jq
 ```
 
 Episodes already written into a digest are **not** re-scored: the Markdown on
@@ -1122,7 +1116,7 @@ override pointing at an Ollama host that no longer exists will quietly defeat
 the config you just copied:
 
 ```bash
-curl -fsS -H "X-API-Key: $KEY" "http://$HOST/api/v1/settings" \
+curl -fsS "http://$HOST/api/v1/settings" \
   | jq '{overrides: .overrides.llm, chains: (.tiers | map_values(.active_chain))}'
 ```
 
@@ -1141,10 +1135,6 @@ a derived cache — `POST /api/v1/search/rebuild` recreates it in seconds.
 ### Rotating keys
 
 ```bash
-# Admin API key: no data impact
-openssl rand -hex 32                      # update PODAGENT_ADMIN_API_KEY in .env
-docker compose up -d podcast-agent
-
 # CouchDB password: must change in both places at once
 docker compose exec couchdb-podcast \
   curl -sS -X PUT "http://127.0.0.1:5984/_node/_local/_config/admins/podagent" \
@@ -1166,8 +1156,9 @@ covers the mechanisms; the operational rules are:
   and sits on an internal-only Docker network, unreachable from the LAN — that
   is the property the compose network layout exists for, and a test asserts it.
   Whoever can write to that database can change where model work is sent.
-- The console pages are served without the key, but carry no data — every value
-  arrives over the authenticated API. They are still LAN-only surfaces.
+- The console is gated by a shared reverse-proxy login now, not an app-level
+  key — it carries no credential itself, and every value arrives over the
+  authenticated API once the browser holds a valid session. Still LAN-only.
 - **Where prompts and transcripts go is a deploy-time decision.** A tier's
   `api_base` may only name a host `config.yaml` already names, loopback, or the
   provider's own endpoint; the console cannot introduce a new one.

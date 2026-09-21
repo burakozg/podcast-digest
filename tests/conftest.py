@@ -18,7 +18,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 from helpers import FakeLLM, make_episode, make_settings
 
 from podcast_agent import net
-from podcast_agent.api.auth import reset_throttle
 from podcast_agent.config import Settings
 from podcast_agent.db import MemoryStore
 
@@ -57,17 +56,6 @@ def _no_real_dns(monkeypatch: pytest.MonkeyPatch) -> None:
         return ["93.184.216.34"]
 
     monkeypatch.setattr(net, "_resolve", _public)
-
-
-@pytest.fixture(autouse=True)
-def _forget_failed_auth() -> None:
-    """The auth throttle counts failures per address, in module state.
-
-    Left alone it would leak between tests: a file that exercises a few 401s
-    would make a later test's 401 a 429, and which test broke would depend on
-    the order they ran in.
-    """
-    reset_throttle()
 
 
 @pytest.fixture

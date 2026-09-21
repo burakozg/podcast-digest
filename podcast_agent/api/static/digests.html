@@ -7,8 +7,9 @@
 <title>Digests · Digest Agent</title>
 <!--
   Reading view for generated digests. Same posture as the other console pages:
-  one self-contained file, no external requests, inert shell, key supplied by
-  the browser.
+  one self-contained file, no external requests. Authentication is the reverse
+  proxy's job (a session cookie set at login, before any request reaches this
+  app) — the page carries no credential of its own.
 
   The HTML for a digest body is rendered and sanitised server-side (see
   sanitize.md_to_safe_html) — this page never builds markup out of digest text
@@ -45,10 +46,6 @@
   button:hover:not(:disabled) { border-color: var(--accent); }
   button:disabled { opacity: .4; cursor: not-allowed; }
   button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
-  input[type=password] { font: inherit; font-size: .85rem; padding: .35rem .5rem;
-                         border-radius: 7px; border: 1px solid var(--line);
-                         background: var(--bg); color: var(--ink);
-                         width: 100%; margin: .5rem 0; }
   .pill { font-size: .72rem; padding: .1rem .45rem; border-radius: 999px;
           border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
   .pill.warn { color: var(--warn); border-color: currentColor; }
@@ -57,7 +54,6 @@
   #msg.show { display: block; }
   #msg.err { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
   #msg.ok { background: color-mix(in srgb, var(--good) 12%, transparent); color: var(--good); }
-  #gate { padding: 2rem 1.25rem; max-width: 420px; margin: 3rem auto; }
 
   /* Two panes: the week being read, and the weeks available. On a narrow
      screen the list drops below the digest rather than squeezing it. */
@@ -107,15 +103,7 @@
 </head>
 <body>
 
-<div id="gate" hidden>
-  <h1>Digests</h1>
-  <p class="sub">Enter the admin API key. Kept in this tab only.</p>
-  <input type="password" id="key" placeholder="API key">
-  <button class="primary" id="unlock">Unlock</button>
-  <p class="sub" id="gateErr" style="color:var(--bad)"></p>
-</div>
-
-<div id="app" hidden>
+<div id="app">
 <!--NAV-->
 <header>
   <h1>Digests</h1>
@@ -124,7 +112,6 @@
   <button id="narrateBtn" title="Synthesise this week as an audio file beside the Markdown">Read aloud</button>
   <button id="rawBtn">View Markdown</button>
   <button id="reload">Refresh</button>
-  <button id="forget">Forget key</button>
 </header>
 
 <main>
@@ -160,24 +147,19 @@
 <script>
 (() => {
   "use strict";
-  const KEY_NAME = "podagent_key";
   const $ = (id) => document.getElementById(id);
   let digests = [];
   let current = null;     // the loaded digest payload
   let raw = false;        // Markdown source instead of rendered
 
-  const key = () => sessionStorage.getItem(KEY_NAME) || "";
-
   async function api(path, options = {}) {
     const res = await fetch(path, {
       ...options,
       headers: {
-        "X-API-Key": key(),
         ...(options.body ? { "Content-Type": "application/json" } : {}),
         ...(options.headers || {}),
       },
     });
-    if (res.status === 401) { lock("Key rejected."); throw new Error("unauthorised"); }
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
       const d = body.detail;
@@ -292,7 +274,7 @@
         again ? "true" : "false"}`, { method: "POST" });
       say("Started. The audio lands beside the digest in your vault; refresh to see it.");
     } catch (err) {
-      if (err.message !== "unauthorised") say(`Read aloud failed: ${err.message}`, "err");
+      say(`Read aloud failed: ${err.message}`, "err");
     } finally {
       button.disabled = false;
     }
@@ -305,7 +287,6 @@
       renderWeeks();
       renderDigest();
     } catch (err) {
-      if (err.message === "unauthorised") return;
       current = null;
       renderWeeks();
       $("facts").innerHTML = "";
@@ -328,34 +309,15 @@
       if (wanted) await open(wanted, (current && current.run) || 0);
       else renderDigest();
     } catch (err) {
-      if (err.message !== "unauthorised") say(`Load failed: ${err.message}`, "err");
+      say(`Load failed: ${err.message}`, "err");
     }
   }
 
-  async function unlock() {
-    const value = $("key").value.trim();
-    if (!value) return;
-    sessionStorage.setItem(KEY_NAME, value);
-    try { await api("/api/v1/digests"); start(); }
-    catch { sessionStorage.removeItem(KEY_NAME); $("gateErr").textContent = "That key was rejected."; }
-  }
-
-  function lock(reason) {
-    sessionStorage.removeItem(KEY_NAME);
-    $("app").hidden = true; $("gate").hidden = false;
-    $("gateErr").textContent = reason || "";
-  }
-
-  function start() { $("gate").hidden = true; $("app").hidden = false; load(); }
-
-  $("unlock").addEventListener("click", unlock);
-  $("key").addEventListener("keydown", (e) => { if (e.key === "Enter") unlock(); });
   $("reload").addEventListener("click", load);
-  $("forget").addEventListener("click", () => lock("Key cleared."));
   $("narrateBtn").addEventListener("click", narrate);
   $("rawBtn").addEventListener("click", () => { raw = !raw; renderDigest(); });
 
-  if (key()) start(); else $("gate").hidden = false;
+  load();
 })();
 </script>
 </body>

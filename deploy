@@ -20,13 +20,10 @@ nas_load_env "$PWD" "/share/Container/podcast-digest"
 
 LIFECYCLE=compose
 
-# The agent container's own address on the qnet macvlan. Compose reads it from
-# the NAS's .env (which is where docker-compose.nas.yml substitutes it); this
-# script only needs it to print a URL and to probe. Prefer .deploy.env, then
-# fall back to whichever spelling this repo's .env still uses — .env is
-# git-ignored on both machines, so nothing here could rename it for you.
-APP_LAN_IP="${APP_LAN_IP:-$(grep -hE '^(APP_LAN_IP|NAS_LAN_IP)=' .env 2>/dev/null | tail -1 | cut -d= -f2-)}"
-APP_LAN_IP="${APP_LAN_IP:-10.0.0.2}"
+# No LAN address of its own any more — moved to homelab-internal as part of
+# the central-login migration (see homelab-auth/README.md). Reached only
+# through Traefik's podcast-digest.servers.zou route, which is why the checks
+# below probe via `docker exec traefik-1` rather than curling a URL from here.
 
 # Must match the `image:` in docker-compose.yml, or compose will ignore what we
 # just loaded and try to pull a tag that does not exist in any registry.
@@ -49,11 +46,34 @@ do_ship() {
   # and env overrides, which rank above this file, so shipping it cannot
   # overwrite them.
   nas_put config.yaml "${NAS_APP_DIR}/config.yaml"
-  # The .nas file carries a MAC placeholder rather than a tracked address — see
-  # its header and nas_mac_for_ip. Rendered here, shipped from deploy-out/.
-  nas_render docker-compose.nas.yml deploy-out/docker-compose.nas.yml \
-    "s#APP_MAC_PLACEHOLDER#$(nas_mac_for_ip "${APP_LAN_IP}")#"
-  nas_put deploy-out/docker-compose.nas.yml "${NAS_APP_DIR}/docker-compose.nas.yml"
+  nas_put docker-compose.nas.yml "${NAS_APP_DIR}/docker-compose.nas.yml"
+}
+
+# No LAN IP to curl from the Mac any more — probed by asking Traefik, which
+# shares homelab-internal with this container, to reach it by container name
+# instead. Same contract as nas_probe/nas_wait_reachable (same messages, same
+# non-zero-on-failure), just a different transport.
+do_probe_via_traefik() {
+  if nas_ssh "'${NAS_DOCKER_BIN}' exec traefik-1 wget -q -O /dev/null --timeout=5 http://podcast-agent:8080/admin" 2>/dev/null; then
+    echo "✓ Agent: up → http://podcast-agent:8080 (via Traefik's internal network)"
+  else
+    echo "✗ Agent: no answer at http://podcast-agent:8080/admin (via Traefik's internal network)"
+    return 1
+  fi
+}
+
+do_wait_reachable_via_traefik() {
+  local tries=72 i=1
+  while [ "$i" -le "$tries" ]; do
+    do_probe_via_traefik >/dev/null 2>&1 && { do_probe_via_traefik; return 0; }
+    [ "$i" = 1 ] && echo "  … Agent not up yet; waiting"
+    sleep 5
+    i=$((i + 1))
+  done
+  do_probe_via_traefik || {
+    echo "    Still unreachable after $((tries * 5))s."
+    return 1
+  }
 }
 
 # ── apply ─────────────────────────────────────────────────────────────────────
@@ -77,16 +97,13 @@ do_apply() {
     || die "compose up failed on the NAS."
   nas_ssh "cd '${NAS_APP_DIR}' && ${NAS_DOCKER_ENV} '${NAS_DOCKER_BIN}' compose -f docker-compose.yml -f docker-compose.nas.yml ps --format 'table {{.Name}}\t{{.Status}}'"
   echo
-  # "Up (healthy)" is checked from inside the container; this is checked from
-  # here, over the network a user actually arrives on. See nas_wait_reachable.
-  nas_wait_reachable "Agent" "http://${APP_LAN_IP}:8080" "/admin" \
-    || die "Deployed, but the console is not reachable over the LAN — see above."
+  # "Up (healthy)" is checked from inside the container; this is checked via
+  # Traefik's own path to it, which is the path that actually matters now.
+  do_wait_reachable_via_traefik \
+    || die "Deployed, but the console is not reachable via Traefik — see above."
   echo
-  echo "done. Console: http://${APP_LAN_IP}:8080/admin"
+  echo "done. Console: http://podcast-digest.servers.zou/admin"
   echo "Logs:  ssh -p $NAS_SSH_PORT $NAS_SSH \"cd '$NAS_APP_DIR' && '$NAS_DOCKER_BIN' compose logs -f podcast-agent\""
-  echo
-  echo "Note: the NAS host itself cannot reach ${APP_LAN_IP} (macvlan); check the"
-  echo "console from another machine on the LAN."
 }
 
 # ── restore ───────────────────────────────────────────────────────────────────
@@ -106,10 +123,7 @@ do_check() {
   nas_ssh "cd '${NAS_APP_DIR}' && '${NAS_DOCKER_BIN}' compose -f docker-compose.yml -f docker-compose.nas.yml ps --format 'table {{.Name}}\t{{.Status}}'"
   echo
   echo "══ console ═══════════════════════════════════════════════════"
-  nas_probe "Agent" "http://${APP_LAN_IP}:8080" "/admin" || {
-    echo "  ↳ Expected if you're off the LAN/VPN. The NAS host cannot reach its own"
-    echo "    macvlan children either — probe from another machine, not over ssh."
-  }
+  do_probe_via_traefik
 }
 
 usage() {

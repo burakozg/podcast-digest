@@ -55,7 +55,6 @@
   button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
   select, input { font: inherit; font-size: .85rem; padding: .35rem .5rem; border-radius: 7px;
                   border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
-  input[type=password] { width: 100%; margin: .5rem 0; }
   .pill { font-size: .72rem; padding: .1rem .45rem; border-radius: 999px;
           border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
   .sub { color: var(--muted); font-size: .82rem; }
@@ -65,7 +64,6 @@
   #msg.show { display: block; }
   #msg.err { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
   #msg.ok { background: color-mix(in srgb, var(--good) 12%, transparent); color: var(--good); }
-  #gate { padding: 2rem 1.25rem; max-width: 420px; margin: 3rem auto; }
 
   /* A suggestion is an argument, so it is laid out as one: the claim, the
      evidence, and how sure to be — never a bare instruction. */
@@ -85,22 +83,13 @@
 </head>
 <body>
 
-<div id="gate" hidden>
-  <h1>Insights</h1>
-  <p class="sub">Enter the admin API key. Kept in this tab only.</p>
-  <input type="password" id="key" placeholder="API key">
-  <button class="primary" id="unlock">Unlock</button>
-  <p class="sub" id="gateErr" style="color:var(--bad)"></p>
-</div>
-
-<div id="app" hidden>
+<div id="app">
 <!--NAV-->
 <header>
   <h1>Insights</h1>
   <span class="pill" id="summary"></span>
   <span style="flex:1"></span>
   <button id="reload">Refresh</button>
-  <button id="forget">Forget key</button>
 </header>
 
 <main>
@@ -222,21 +211,16 @@
 <script>
 (() => {
   "use strict";
-  const KEY_NAME = "podagent_key";
   const $ = (id) => document.getElementById(id);
-
-  const key = () => sessionStorage.getItem(KEY_NAME) || "";
 
   async function api(path, options = {}) {
     const res = await fetch(path, {
       ...options,
       headers: {
-        "X-API-Key": key(),
         ...(options.body ? { "Content-Type": "application/json" } : {}),
         ...(options.headers || {}),
       },
     });
-    if (res.status === 401) { lock("Key rejected."); throw new Error("unauthorised"); }
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
       const d = body.detail;
@@ -266,7 +250,7 @@
       const body = await api(`/api/v1/insights/precision?days=${$("days").value}`);
       renderPrecision(body);
     } catch (err) {
-      if (err.message !== "unauthorised") say(`Report failed: ${err.message}`, "err");
+      say(`Report failed: ${err.message}`, "err");
     }
   }
 
@@ -339,7 +323,7 @@
           <td>${esc(e.first_seen)}</td><td>${esc(e.last_seen)}</td>
         </tr>`).join("") || `<tr><td colspan="6" class="sub">Nothing mentioned that often yet.</td></tr>`;
     } catch (err) {
-      if (err.message !== "unauthorised") say(`Entities failed: ${err.message}`, "err");
+      say(`Entities failed: ${err.message}`, "err");
     }
   }
 
@@ -393,7 +377,7 @@
         : `<p class="sub">Nothing qualifies yet. Widen the window, lower the score,
            or add interests.</p>`;
     } catch (err) {
-      if (err.message !== "unauthorised") $("seedState").textContent = err.message;
+      $("seedState").textContent = err.message;
     }
   }
 
@@ -413,33 +397,14 @@
 
   function load() { loadPrecision(); loadEntities(); loadSeeds(); }
 
-  async function unlock() {
-    const value = $("key").value.trim();
-    if (!value) return;
-    sessionStorage.setItem(KEY_NAME, value);
-    try { await api("/api/v1/status"); start(); }
-    catch { /* api() locks and reports */ }
-  }
-
-  function lock(reason) {
-    sessionStorage.removeItem(KEY_NAME);
-    $("app").hidden = true; $("gate").hidden = false;
-    $("gateErr").textContent = reason || "";
-  }
-
-  function start() { $("gate").hidden = true; $("app").hidden = false; load(); }
-
-  $("unlock").addEventListener("click", unlock);
-  $("key").addEventListener("keydown", (e) => { if (e.key === "Enter") unlock(); });
   $("reload").addEventListener("click", load);
-  $("forget").addEventListener("click", () => lock("Key cleared."));
   $("days").addEventListener("change", loadPrecision);
   $("entDays").addEventListener("change", loadEntities);
   $("entMin").addEventListener("change", loadEntities);
   $("entNotes").addEventListener("click", writeNotes);
   $("seedBuild").addEventListener("click", buildSeeds);
 
-  if (key()) start(); else $("gate").hidden = false;
+  load();
 })();
 </script>
 </body>

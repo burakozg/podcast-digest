@@ -52,7 +52,6 @@
   button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
   select, input { font: inherit; font-size: .85rem; padding: .35rem .5rem; border-radius: 7px;
                   border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
-  input[type=password] { width: 100%; margin: .5rem 0; }
   .pill { font-size: .72rem; padding: .1rem .45rem; border-radius: 999px;
           border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
   .pill.on { color: var(--good); border-color: currentColor; }
@@ -67,7 +66,6 @@
   #msg.show { display: block; }
   #msg.err { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
   #msg.ok { background: color-mix(in srgb, var(--good) 12%, transparent); color: var(--good); }
-  #gate { padding: 2rem 1.25rem; max-width: 420px; margin: 3rem auto; }
   .addgrid { display: grid; gap: .6rem; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
   fieldset { border: 1px solid var(--line); border-radius: 8px; padding: .75rem; }
   legend { font-size: .78rem; color: var(--muted); padding: 0 .35rem; }
@@ -75,21 +73,12 @@
 </head>
 <body>
 
-<div id="gate" hidden>
-  <h1>Settings</h1>
-  <p class="sub">Enter the admin API key. Kept in this tab only.</p>
-  <input type="password" id="key" placeholder="API key">
-  <button class="primary" id="unlock">Unlock</button>
-  <p class="sub" id="gateErr" style="color:var(--bad)"></p>
-</div>
-
-<div id="app" hidden>
+<div id="app">
 <!--NAV-->
 <header>
   <h1>Settings</h1>
   <span style="flex:1"></span>
   <button id="reload">Reload</button>
-  <button id="forget">Forget key</button>
 </header>
 
 <main>
@@ -214,22 +203,17 @@
 <script>
 (() => {
   "use strict";
-  const KEY_NAME = "podagent_key";
   const $ = (id) => document.getElementById(id);
   let current = null;
-
-  const key = () => sessionStorage.getItem(KEY_NAME) || "";
 
   async function api(path, options = {}) {
     const res = await fetch(path, {
       ...options,
       headers: {
-        "X-API-Key": key(),
         ...(options.body ? { "Content-Type": "application/json" } : {}),
         ...(options.headers || {}),
       },
     });
-    if (res.status === 401) { lock("Key rejected."); throw new Error("unauthorised"); }
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
       const d = body.detail;
@@ -645,7 +629,7 @@
           renderLadder(p);
         }));
     } catch (err) {
-      if (err.message !== "unauthorised") say(err.message, "err");
+      say(err.message, "err");
     }
   }
 
@@ -672,22 +656,6 @@
     } catch (err) { say(err.message, "err"); }
   }
 
-  async function unlock() {
-    const value = $("key").value.trim();
-    if (!value) return;
-    sessionStorage.setItem(KEY_NAME, value);
-    try { await api("/api/v1/settings"); start(); }
-    catch { sessionStorage.removeItem(KEY_NAME); $("gateErr").textContent = "That key was rejected."; }
-  }
-
-  function lock(reason) {
-    sessionStorage.removeItem(KEY_NAME);
-    $("app").hidden = true; $("gate").hidden = false;
-    $("gateErr").textContent = reason || "";
-  }
-
-  function start() { $("gate").hidden = true; $("app").hidden = false; load(); }
-
   $("save").addEventListener("click", save);
   $("reset").addEventListener("click", reset);
   $("reload").addEventListener("click", load);
@@ -695,11 +663,7 @@
     current.interest_profile.push({ key: "", label: "", description: "", weight: 5 });
     renderInterests(current.interest_profile);
   });
-  $("forget").addEventListener("click", () => lock("Key cleared."));
-  $("unlock").addEventListener("click", unlock);
-  $("key").addEventListener("keydown", (e) => { if (e.key === "Enter") unlock(); });
-
-  if (key()) start(); else $("gate").hidden = false;
+  load();
 })();
 </script>
 </body>

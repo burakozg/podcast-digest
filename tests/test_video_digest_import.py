@@ -43,7 +43,6 @@ from podcast_agent.state import (
 from podcast_agent.utils import episode_doc_id, podcast_doc_id
 
 BASE = "http://video-digest.test:8090"
-KEY = {"X-API-Key": "test-admin-key"}
 
 
 def _video(video_id: str = "vid1", **overrides: Any) -> dict[str, Any]:
@@ -316,13 +315,9 @@ class TestTheManualTrigger:
         """Zero fetched is also what a healthy run over an empty export
         returns, so a missing key must not be reported as "nothing new"."""
         with self._client(tmp_path, store) as client:
-            resp = client.post("/api/v1/runs/video-digest", headers=KEY)
+            resp = client.post("/api/v1/runs/video-digest")
 
         assert resp.status_code == 409
-
-    def test_it_needs_the_admin_key(self, tmp_path: Any, store: MemoryStore) -> None:
-        with self._client(tmp_path, store) as client:
-            assert client.post("/api/v1/runs/video-digest").status_code == 401
 
     @respx.mock
     def test_a_configured_pull_reports_what_it_did(self, tmp_path: Any, store: MemoryStore) -> None:
@@ -333,7 +328,7 @@ class TestTheManualTrigger:
         }
 
         with self._client(tmp_path, store, **over) as client:
-            body = client.post("/api/v1/runs/video-digest", headers=KEY).json()
+            body = client.post("/api/v1/runs/video-digest").json()
 
         assert body["job"] == "video_digest_import"
         assert body["result"]["created"] == 2

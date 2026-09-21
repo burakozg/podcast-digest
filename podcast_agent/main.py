@@ -14,13 +14,12 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from typing import Any
 
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import ValidationError
 
 from . import __version__, logstore
-from .api.auth import require_api_key
 from .api.pages import page
 from .api.podcasts import router as podcasts_router
 from .api.routes import api_router, health_router
@@ -450,19 +449,17 @@ def build_app(settings: Settings, *, store: Store | None = None, llm: Any = None
             content={"detail": f"database unavailable: {str(exc)[:200]}"},
         )
 
-    @app.get("/openapi.json", include_in_schema=False, dependencies=[Depends(require_api_key)])
+    @app.get("/openapi.json", include_in_schema=False)
     async def openapi_json() -> JSONResponse:
         return JSONResponse(app.openapi())
 
-    @app.get("/docs", include_in_schema=False, dependencies=[Depends(require_api_key)])
+    @app.get("/docs", include_in_schema=False)
     async def docs() -> HTMLResponse:
         return get_swagger_ui_html(openapi_url="/openapi.json", title="Podcast Digest Agent")
 
-    # Console pages. Served without the API key on purpose: each is inert HTML
-    # and JS carrying no data. The key is entered in the browser and sent as a
-    # header on every request, which is the only way a plain page navigation can
-    # authenticate against a header-keyed API — all data still goes through the
-    # authenticated endpoints.
+    # Console pages. Inert HTML and JS carrying no data of their own — every
+    # request they make for actual data goes through the reverse proxy, which
+    # authenticates the caller before it reaches this app.
     for route, filename in (
         ("/admin", "admin.html"),
         ("/admin/digests", "digests.html"),
@@ -492,9 +489,6 @@ def build_app(settings: Settings, *, store: Store | None = None, llm: Any = None
         app.get(route, include_in_schema=False)(_console())
 
     app.state.settings = settings
-    app.state.admin_api_key = (
-        settings.admin_api_key.get_secret_value() if settings.admin_api_key else None
-    )
     return app
 
 
@@ -529,11 +523,6 @@ def create_app() -> FastAPI:
     """ASGI factory used by uvicorn (``podcast_agent.main:create_app``)."""
     settings = _load_or_die()
     configure_logging(settings.logging)
-    if not settings.admin_api_key:
-        log.warning(
-            "app.no_admin_key",
-            detail="PODAGENT_ADMIN_API_KEY is unset — all /api/v1 endpoints will return 503",
-        )
     return build_app(settings)
 
 

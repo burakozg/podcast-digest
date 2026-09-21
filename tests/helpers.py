@@ -80,7 +80,6 @@ def make_settings(tmp_path: Path, **overrides: Any) -> Settings:
             "enforce_domain_allowlist": True,
             "cdn_allowlist": ["cdn-host.net", "transcript-host.net"],
         },
-        "admin_api_key": "test-admin-key",
         "logging": {"level": "WARNING", "format": "console"},
     }
     for key, value in overrides.items():
