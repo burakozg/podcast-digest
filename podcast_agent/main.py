@@ -32,7 +32,7 @@ from .digest.archive import ArchiveDigestGenerator
 from .digest.episode_notes import write_episode_notes
 from .digest.generate import DigestGenerator
 from .digest.narrate import DigestNarrator
-from .entities import aggregate, digest_weeks, rank, write_entity_notes
+from .entities import aggregate, digest_weeks, rank, resolve_note_names, write_entity_notes
 from .ingest.feeds import Ingestor
 from .ingest.video_digest import VideoDigestImporter
 from .joblock import reclaim_local_leases
@@ -278,15 +278,28 @@ def build_app(settings: Settings, *, store: Store | None = None, llm: Any = None
             """Weekly: one note per entity worth a page of its own, then into
             the vault. This is what the digests' `[[wikilinks]]` resolve to."""
             weeks = await digest_weeks(active_store)
+            found = await aggregate(active_store)
+            ranked = rank(found, min_mentions=active_settings.pipeline.entity_note_min_mentions)
+            # Named before episode notes are written, not after: an episode
+            # note's `[[wikilink]]` to a topic is only as good as the page it
+            # points to, and an entity `rank` just dropped for too few mentions
+            # has no page — linking it anyway is what created empty stub notes
+            # at the vault root the moment anyone followed the link.
+            topic_of = await resolve_note_names(
+                active_store,
+                ranked,
+                vault=vault,
+                entities_folder=active_settings.vault.entities_folder,
+            )
             # Episode notes first: a topic note can only link a note that
             # already exists, and `note_of` is what carries the mapping.
             note_of = (
-                await write_episode_notes(active_store, active_settings, week_of=weeks)
+                await write_episode_notes(
+                    active_store, active_settings, week_of=weeks, topic_of=topic_of
+                )
                 if active_settings.output.episode_notes
                 else {}
             )
-            found = await aggregate(active_store)
-            ranked = rank(found, min_mentions=active_settings.pipeline.entity_note_min_mentions)
             paths = await write_entity_notes(
                 active_store, active_settings, ranked, week_of=weeks, note_of=note_of
             )

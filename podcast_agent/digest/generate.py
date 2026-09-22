@@ -20,6 +20,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from ..backfill import ROUTINE_ONLY
 from ..config import Settings
 from ..db import Doc, Store, typed_sort, update_doc
+from ..entities import canonical
 from ..episodes import transition
 from ..llm.base import StructuredLLM
 from ..logging_setup import get_logger
@@ -30,7 +31,6 @@ from ..sanitize import (
     md_to_speech_text,
     safe_url,
     sanitize_md_block,
-    slugify,
 )
 from ..state import AUDIT_ONLY_STATUSES, DIGESTABLE_STATUSES, EpisodeStatus
 from ..utils import digest_doc_id, format_duration, iso, iso_now, parse_iso, utcnow
@@ -103,6 +103,30 @@ def _interest_labels(settings: Settings, keys: list[str] | None) -> list[str]:
     return [md_escape_inline(by_key[k], max_chars=60) for k in (keys or []) if k in by_key]
 
 
+def _entity_links(
+    entities_folder: str, raw_entities: list[Any], topic_of: dict[str, str]
+) -> list[str]:
+    """A wikilink for an entity that has a topic page; plain text otherwise.
+
+    Looked up by :func:`entities.canonical`, not by re-slugifying this
+    episode's own spelling: two episodes naming the same thing differently
+    must resolve to the one filename `entities.resolve_note_names` pinned, and
+    an entity that has not yet reached `entities.DEFAULT_MIN_MENTIONS` has no
+    page at all. Linking it anyway is what used to create an empty stub note
+    at the vault root the moment anyone followed the link — Obsidian
+    auto-creates the target of a wikilink that resolves to nothing.
+    """
+    links: list[str] = []
+    for e in raw_entities[:20]:
+        text = str(e).strip()
+        if not text:
+            continue
+        label = md_escape_inline(text, max_chars=80)
+        filename = topic_of.get(canonical(text))
+        links.append(f"[[{entities_folder}/{filename}|{label}]]" if filename else label)
+    return links
+
+
 def _episode_views(
     settings: Settings,
     episode: Doc,
@@ -152,7 +176,13 @@ def _episode_views(
     return summary_view(settings, episode, basis_labels)
 
 
-def summary_view(settings: Settings, episode: Doc, basis_labels: dict[str, str]) -> dict[str, Any]:
+def summary_view(
+    settings: Settings,
+    episode: Doc,
+    basis_labels: dict[str, str],
+    *,
+    topic_of: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """The template view of a *summarised* episode.
 
     Split out of :func:`_episode_views` so the ad-hoc Markdown export can reach
@@ -160,6 +190,13 @@ def summary_view(settings: Settings, episode: Doc, basis_labels: dict[str, str])
     and must not be routed through the status branching above — a DIGEST_DIRECT
     episode that was later summarised on request would otherwise come back in
     the one-liner shape, with no ``summary_md`` at all.
+
+    ``topic_of`` maps an entity's canonical key to its pinned topic-note
+    filename, for entities that actually have one — see
+    :func:`entities.resolve_note_names`. Only the episode-note template links
+    entities at all (the weekly digest and export views use plain ``entities``
+    text instead), so callers that never render ``entity_links`` can safely
+    leave this unset.
     """
     tier1 = episode.get("tier1") or {}
     published = (episode.get("published_at") or "")[:10] or "unknown date"
@@ -185,11 +222,9 @@ def summary_view(settings: Settings, episode: Doc, basis_labels: dict[str, str])
         # both ends: the entity note lists its episodes, and the episode note
         # points back. Plain text in the weekly digest, which is read top to
         # bottom rather than navigated.
-        "entity_links": [
-            f"[[{slugify(str(e))}|{md_escape_inline(str(e), max_chars=80)}]]"
-            for e in (tier1.get("entities") or [])[:20]
-            if slugify(str(e))
-        ],
+        "entity_links": _entity_links(
+            settings.vault.entities_folder, tier1.get("entities") or [], topic_of or {}
+        ),
         "interests": _interest_labels(settings, tier1.get("matched_interests")),
         "interest_keys": [str(k) for k in (tier1.get("matched_interests") or [])],
         "listen_anyway": bool(tier1.get("listen_anyway")),

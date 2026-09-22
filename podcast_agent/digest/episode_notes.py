@@ -186,11 +186,17 @@ async def write_episode_notes(
     settings: Settings,
     *,
     week_of: dict[str, str] | None = None,
+    topic_of: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Write one note per summarised episode. Returns ``episode_id -> filename``.
 
     The mapping is the point as much as the files are: it is what lets a topic
     note link the episode rather than the digest it shipped in.
+
+    ``topic_of`` should be entities ranked and named *before* this runs (see
+    ``main.rebuild_entity_notes``) — an entity's ``## Mentioned`` link is only
+    ever as good as the topic page it points to, and a page that does not
+    exist yet is not something an episode note should link to.
     """
     episodes = await summarised_episodes(store)
     if not episodes:
@@ -205,7 +211,7 @@ async def write_episode_notes(
     current: set[Path] = set()
     for episode in episodes:
         episode_id = str(episode["_id"])
-        view: dict[str, Any] = summary_view(settings, episode, BASIS_LABELS)
+        view: dict[str, Any] = summary_view(settings, episode, BASIS_LABELS, topic_of=topic_of)
         # Only a weekly digest gives a week to link back to. Archive episodes
         # have none, and the template omits the line rather than emitting a
         # link to a note that was never written.

@@ -36,6 +36,7 @@ from ..entities import (
     canonical,
     digest_weeks,
     rank,
+    resolve_note_names,
     timeline,
     window_start,
     write_entity_notes,
@@ -1237,14 +1238,22 @@ async def write_entities(
         min_mentions if min_mentions is not None else settings.pipeline.entity_note_min_mentions
     )
     weeks = await digest_weeks(store)
+    found = await aggregate(store, since=window_start(days))
+    ranked = rank(found, min_mentions=threshold)
+    # Named before episode notes are written, not after: an episode note's
+    # `[[wikilink]]` to a topic is only as good as the page it points to, and
+    # an entity `rank` just dropped for too few mentions has no page — linking
+    # it anyway is what created empty stub notes at the vault root the moment
+    # anyone followed the link.
+    topic_of = await resolve_note_names(
+        store, ranked, vault=_vault(request), entities_folder=settings.vault.entities_folder
+    )
     # Episode notes first — a topic note can only link one that already exists.
     note_of = (
-        await write_episode_notes(store, settings, week_of=weeks)
+        await write_episode_notes(store, settings, week_of=weeks, topic_of=topic_of)
         if settings.output.episode_notes
         else {}
     )
-    found = await aggregate(store, since=window_start(days))
-    ranked = rank(found, min_mentions=threshold)
     paths = await write_entity_notes(store, settings, ranked, week_of=weeks, note_of=note_of)
 
     # Re-projecting everything, not just the new notes: a digest is projected on

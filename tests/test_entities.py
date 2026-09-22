@@ -26,9 +26,11 @@ from podcast_agent.entities import (
     canonical,
     display_name,
     rank,
+    resolve_note_names,
     timeline,
     write_entity_notes,
 )
+from podcast_agent.entities import _adopt as adopt_existing_filename
 from podcast_agent.main import build_app
 from podcast_agent.migrate import seed_topic_note_names
 from podcast_agent.state import EpisodeStatus
@@ -55,6 +57,13 @@ class TestCanonicalisation:
             ("Mandiant", "Mandiant Inc."),
             ("The Shadow Brokers", "Shadow Brokers"),
             ("Modbus.", "Modbus"),
+            # Aliased explicitly: an internal space is not noise `canonical`
+            # strips on its own, so these two would otherwise stay two
+            # entities — see homelab's vault-doctor.py, which is what found
+            # them already split into two topic notes.
+            ("Hugging Face", "HuggingFace"),
+            ("Shiny Hunters", "ShinyHunters"),
+            ("Threat Locker", "ThreatLocker"),
         ],
     )
     def test_spellings_of_one_thing_agree(self, a: str, b: str) -> None:
@@ -342,14 +351,31 @@ class TestEpisodeNotesLinkBack:
         assert "entity_links" not in template
 
     def test_the_view_builds_them(self, tmp_path: Path) -> None:
-        from podcast_agent.digest.generate import BASIS_LABELS, _episode_views
+        """Looked up by canonical key, path-qualified to the topics folder —
+        never re-slugified from this episode's own spelling of the name."""
+        from podcast_agent.digest.generate import BASIS_LABELS, summary_view
 
-        view = _episode_views(
+        view = summary_view(
             make_settings(tmp_path),
             episode("a", ["Volt Typhoon"]),
             BASIS_LABELS,
+            topic_of={"volt typhoon": "volt-typhoon"},
         )
-        assert view["entity_links"] == ["[[volt-typhoon|Volt Typhoon]]"]
+        assert view["entity_links"] == ["[[99 topics/volt-typhoon|Volt Typhoon]]"]
+
+    def test_an_entity_with_no_topic_page_is_plain_text(self, tmp_path: Path) -> None:
+        """Below `entities.DEFAULT_MIN_MENTIONS` there is no page yet — linking
+        anyway is what used to create an empty stub note at the vault root the
+        moment anyone followed the link."""
+        from podcast_agent.digest.generate import BASIS_LABELS, summary_view
+
+        view = summary_view(
+            make_settings(tmp_path),
+            episode("a", ["Volt Typhoon"]),
+            BASIS_LABELS,
+            topic_of={},
+        )
+        assert view["entity_links"] == ["Volt Typhoon"]
 
 
 class TestItReadsRatherThanWrites:
@@ -449,6 +475,75 @@ class TestATopicNoteKeepsItsFilename:
         )
         written = await write_entity_notes(store, settings, [entity])
         assert written == ["entities/fortinet.md"]
+
+
+class _FakeVaultListing:
+    """Just enough of `LiveSyncVault` for `resolve_note_names`'s adoption
+    check: a fixed answer to `entries_under`, no network involved."""
+
+    def __init__(self, paths: list[str]) -> None:
+        self._paths = paths
+
+    async def entries_under(self, prefix: str) -> list[dict]:
+        return [{"path": p} for p in self._paths if p.startswith(prefix.rstrip("/") + "/")]
+
+
+class TestAnAliasAdoptsAnExistingPage:
+    """Merging two keys in `canonical._ALIASES` must not re-split the page.
+
+    A key with a brand-new alias target has no pin of its own yet — it is, from
+    this app's own history, indistinguishable from a genuinely new topic. Left
+    to `slugify(entity.name)` alone, it would propose its own guess and pin a
+    *second* file the moment the merge takes effect, even though the entity
+    already has a page (written under the pre-alias key, possibly by
+    security-digest or clippings-topics, not this app at all). See `_adopt`.
+    """
+
+    def _entity(self, key: str, surfaces: dict[str, int]) -> Entity:
+        return Entity(
+            key=key,
+            surfaces=dict(surfaces),
+            shows={"A"},
+            episodes=[{"published_at": "2026-01-01T00:00:00Z", "title": "t", "podcast_name": "A"}]
+            * sum(surfaces.values()),
+        )
+
+    def test_the_most_common_surface_is_tried_first(self) -> None:
+        entity = self._entity("shinyhunters", {"Shiny Hunters": 12})
+        assert adopt_existing_filename(entity, {"shinyhunters", "fortinet"}) == "shinyhunters"
+
+    def test_the_canonical_key_is_tried_if_no_surface_matches(self) -> None:
+        # slugify("Shiny Hunters") == "shiny-hunters", which is not in
+        # `existing` here — only the key's own slug, "shinyhunters", is.
+        entity = self._entity("shinyhunters", {"Shiny Hunters": 12})
+        assert adopt_existing_filename(entity, {"unrelated"}) is None
+        assert adopt_existing_filename(entity, {"shinyhunters"}) == "shinyhunters"
+
+    def test_nothing_existing_means_no_adoption(self) -> None:
+        entity = self._entity("shinyhunters", {"Shiny Hunters": 12})
+        assert adopt_existing_filename(entity, set()) is None
+
+    async def test_resolve_note_names_adopts_over_proposing(
+        self, tmp_path: Path, store: MemoryStore
+    ) -> None:
+        # No prior pin for "shinyhunters" — as if `_ALIASES` just started
+        # folding "Shiny Hunters" into it. Left alone this would propose
+        # "shiny-hunters", pinning a second file beside the real one.
+        entity = self._entity("shinyhunters", {"Shiny Hunters": 12})
+        vault = _FakeVaultListing(["99 topics/shinyhunters.md", "99 topics/fortinet.md"])
+
+        names = await resolve_note_names(
+            store, [entity], vault=vault, entities_folder="99 topics"  # type: ignore[arg-type]
+        )
+
+        assert names[entity.key] == "shinyhunters"
+
+    async def test_no_vault_falls_back_to_the_old_behaviour(
+        self, tmp_path: Path, store: MemoryStore
+    ) -> None:
+        entity = self._entity("shinyhunters", {"Shiny Hunters": 12})
+        names = await resolve_note_names(store, [entity])
+        assert names[entity.key] == "shiny-hunters"
 
 
 class TestSeedingNamesFromNotesAlreadyInTheVault:

@@ -30,6 +30,7 @@ from .notes import ENTITIES_DIR, KEY_PREFIX, wrap
 from .sanitize import md_escape_inline, slugify
 from .state import OURS_ONLY
 from .utils import iso, iso_now, utcnow
+from .vault import LiveSyncVault, VaultUnavailable
 
 log = get_logger(__name__)
 
@@ -54,6 +55,24 @@ _LEADING = re.compile(r"^(the|a|an)\s+", re.IGNORECASE)
 #: Trailing corporate suffixes, so "Mandiant" and "Mandiant Inc." agree.
 _TRAILING = re.compile(r"[\s,]+(inc|inc\.|llc|ltd|ltd\.|corp|corp\.|gmbh|plc)$", re.IGNORECASE)
 
+#: Known spelling variants that would otherwise canonicalize to two different
+#: keys. `canonical` only strips punctuation/whitespace noise around a name,
+#: never *inside* one, so "Hugging Face" and "HuggingFace" survive as two
+#: entities, and two topic notes, until named here. A short, curated list
+#: rather than stripping all internal whitespace — that would also fuse
+#: unrelated things that happen to share a run-together/spaced-out spelling
+#: elsewhere in the corpus. Add a pair only once confirmed by hand to be the
+#: same thing; `homelab/vault-doctor.py` is what finds the candidates.
+#:
+#: Ported verbatim alongside `canonical`/`slugify` themselves — see this
+#: module's own note (and `clippings_topics/topics.py`'s) about why all three
+#: copies have to move together.
+_ALIASES = {
+    "huggingface": "hugging face",
+    "shiny hunters": "shinyhunters",
+    "threat locker": "threatlocker",
+}
+
 
 def canonical(name: str) -> str:
     """The key two spellings of the same thing must share.
@@ -74,7 +93,8 @@ def canonical(name: str) -> str:
         return f"cve-{match.group(1)}-{int(match.group(2)):04d}"
     text = _LEADING.sub("", text)
     text = _TRAILING.sub("", text)
-    return text.casefold().strip(" .,;:—-")
+    key = text.casefold().strip(" .,;:—-")
+    return _ALIASES.get(key, key)
 
 
 def display_name(surfaces: dict[str, int]) -> str:
@@ -349,7 +369,34 @@ async def pin_note_names(
     return merged
 
 
-async def resolve_note_names(store: Store, entities: list[Entity]) -> dict[str, str]:
+def _adopt(entity: Entity, existing: set[str]) -> str | None:
+    """A filename already in the vault this entity plainly belongs to.
+
+    Tried most-common-surface first, then the canonical key — the same order,
+    and the same "only an exact match counts" conservatism, as
+    security-digest's own ``_adopt`` (``src/vault/topics.py``), ported for the
+    identical reason: a key with no pin yet is not necessarily a new topic.
+    Adding a pair to ``_ALIASES`` folds two previously-separate keys into one,
+    and the *other* app writing this folder may already have a page under the
+    merged key's own spelling — guessing our own slug instead of checking
+    would just re-split the page the moment we pin it.
+    """
+    if not existing:
+        return None
+    ordered = sorted(entity.surfaces.items(), key=lambda kv: (-kv[1], kv[0]))
+    for candidate in [slugify(s) for s, _ in ordered] + [slugify(entity.key)]:
+        if candidate and candidate in existing:
+            return candidate
+    return None
+
+
+async def resolve_note_names(
+    store: Store,
+    entities: list[Entity],
+    *,
+    vault: LiveSyncVault | None = None,
+    entities_folder: str = "",
+) -> dict[str, str]:
     """``entity key -> note filename``, choosing a name only for the unnamed.
 
     ``display_name`` is a *moving* value: it returns the most common surface, and
@@ -369,10 +416,32 @@ async def resolve_note_names(store: Store, entities: list[Entity]) -> dict[str, 
     still follow the current display name, so the note reads correctly as
     spellings settle — it is only the filename, which links depend on, that is
     frozen.
+
+    ``vault``/``entities_folder``, when given, are consulted for an unpinned key
+    before proposing our own slug — see :func:`_adopt`. This is what lets an
+    ``_ALIASES`` addition actually merge two existing pages instead of pinning a
+    third name and re-splitting the entity across two files again on the very
+    next run. Omit ``vault`` (as every caller did before this existed) and the
+    behaviour is exactly the old one: propose ``slugify(entity.name)``.
     """
-    names = await pin_note_names(
-        store, {entity.key: slugify(entity.name) or entity.key for entity in entities}
-    )
+    existing_filenames: set[str] = set()
+    if vault is not None and entities_folder:
+        try:
+            entries = await vault.entries_under(entities_folder)
+            existing_filenames = {
+                str(e.get("path") or "").rsplit("/", 1)[-1].removesuffix(".md").lower()
+                for e in entries
+            }
+        except VaultUnavailable as exc:
+            # Adoption is a nicety on top of naming, not a precondition for it —
+            # a down vault must not block entities from getting a name at all.
+            log.warning("entities.adoption_check_skipped", error=str(exc))
+
+    proposed = {
+        entity.key: _adopt(entity, existing_filenames) or slugify(entity.name) or entity.key
+        for entity in entities
+    }
+    names = await pin_note_names(store, proposed)
     return {entity.key: names.get(entity.key) or entity.key for entity in entities}
 
 
