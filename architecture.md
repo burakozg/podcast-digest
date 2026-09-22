@@ -85,6 +85,7 @@ arrived already written. See §4.
 | Transcripts | `transcripts/` | feed transcript, page, audio | transcript attachment, `TRANSCRIBED` |
 | Summarise | `summarize/tier1.py` | transcript or description | `tier1` block, classified status |
 | Digest | `digest/generate.py` | claimed episodes | Markdown file, `digest` doc, `PUBLISHED` |
+| Reading queue | `reading_queue.py` | the vault's unread note, unread summaries | ticked boxes back onto episodes, the note (§8b) |
 
 ---
 
@@ -214,6 +215,7 @@ Single CouchDB database, documents discriminated by `type`.
 | `asr_run` | `asrrun:<uuid>` | One row per local transcription: audio and compute seconds, model, device |
 | `log` | `log:<uuid>` | Kept warnings/errors (30 days); the live tail stays in memory |
 | `control` | `control:backfill` | Whether the unattended archive walk is paused |
+| `control` | `control:reading_queue` | What each box in the vault's unread-queue note said when it was last written (§8b) |
 | `control` | `control:settings` | Console-edited configuration overlay (§6b) |
 | `control` | `control:lock:<job>` | Cross-process job lease: holder host/pid, expiry, heartbeat |
 
@@ -236,7 +238,8 @@ Episodes additionally carry reader signals written by the console: `starred`,
 `read_at` (a timestamp, not a flag) and a `feedback` block recording an explicit
 "this call was wrong" verdict alongside what the pipeline had judged at the
 time. They feed the insights report (§7b) and are never read by the pipeline
-itself.
+itself. The first two are also written from the *vault* — see §8b, the one place
+this application reads a note back rather than only writing one.
 
 Episode ids are `sha256(podcast_slug + guid)` — stable forever for a given
 (podcast, guid) pair. That single choice is what makes ingestion idempotent: two
@@ -517,6 +520,46 @@ self-hosting a feed beside the agent still works, and everything when
 together rather than half of them. Accepted residual: the address is checked and
 connected to separately (TOCTOU); closing that needs a pinning transport.
 → `test_net.py::TestPrivateAddressesAreRefused`
+
+---
+
+## 8b. The one note read back
+
+Everything else this application puts in the vault is output. `reading_queue.py`
+writes one note — `11 podcasts/_unread.md` — and reads it again, so unread
+summaries can be ticked off on a phone with no network. It is here, beside the
+input guards, because a file every device syncing that vault can edit is an
+input surface, whatever else it is.
+
+The alternative was an offline web app, and it is blocked on something that is
+not about code: a service worker requires a secure context, the console is
+reached over plain HTTP at a hostname under a made-up TLD, and no certificate
+authority will ever issue for it. The vault already solves the same problem —
+it is already on the phone, already offline, already replicating both this
+application's episode notes and video-digest's video notes.
+
+Three properties make it safe to read a note back:
+
+* **What was last written is recorded, not inferred.** `control:reading_queue`
+  holds the state of every box as rendered, plus the link-to-episode map. A box
+  differing from that is a person's tap and is applied; a box agreeing with it
+  is a line nobody touched, so the database stays authoritative and the line is
+  re-rendered. Without the record, a tap and a console click between two polls
+  are indistinguishable, and one of them silently loses.
+* **Nothing is guessed at.** A link that is not in the map — the reader's own,
+  or a note renamed between polls — is logged and skipped rather than matched by
+  similarity. A missing star line means the reader said nothing about the star,
+  not that it is off.
+* **It owns a region, not the file.** The list sits between the same ownership
+  markers `notes.py` uses for shared topic notes, so anything written above or
+  below it survives every rebuild, and a soft delete is respected exactly as it
+  is everywhere else.
+→ `test_reading_queue.py::TestWhatTheReaderTapped`
+
+The known limitation is the tap's time: nothing records when a box was ticked,
+only that the file changed, so `read_at` is when the poll saw it. A week of
+offline reading lands as one moment — which the signals export (§7b) reads as a
+reading time it is not.
 
 ---
 

@@ -43,6 +43,7 @@ def build_scheduler(
     narrate: Callable[[], Awaitable[Any]] | None = None,
     entities: Callable[[], Awaitable[Any]] | None = None,
     video_digest: Callable[[], Awaitable[Any]] | None = None,
+    reading_queue: Callable[[], Awaitable[Any]] | None = None,
 ) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(
         timezone=settings.scheduler.timezone,
@@ -83,6 +84,13 @@ def build_scheduler(
         # enters the pipeline, and a failure here must not look like a feed
         # ingest failure.
         jobs.append(("video_digest_import", settings.video_digest.poll_cron, video_digest))
+    if reading_queue is not None:
+        # The only job that reads the vault as well as writing it: it carries a
+        # phone's ticked boxes back into the database and re-renders the queue
+        # (reading_queue.py). Its own cron rather than the entities one, which
+        # fires weekly — a read mark that took until Friday to register would be
+        # a queue nobody trusts.
+        jobs.append(("reading_queue", settings.scheduler.reading_queue_cron, reading_queue))
     if search is not None:
         # Without this the index is only ever as current as the last manual
         # rebuild, which is the failure mode nobody notices: search quietly

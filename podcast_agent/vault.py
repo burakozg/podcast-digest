@@ -237,6 +237,10 @@ class LiveSyncVault:
     def episodes_folder(self) -> str:
         return self._cfg.episodes_folder
 
+    @property
+    def queue_note(self) -> str:
+        return self._cfg.queue_note
+
     def vault_path(self, relative: Path | str) -> str:
         """Where a file written under ``digest_dir`` lands in the vault.
 
@@ -297,8 +301,40 @@ class LiveSyncVault:
         markdown = to_vault_markdown(
             markdown, known_entities=known_entities, episode_notes=episode_notes
         )
-        path = self.vault_path(relative)
+        return await self._write(
+            self.vault_path(relative), markdown, mtime_ms=mtime_ms, merge=merge
+        )
 
+    async def read_note(self, path: str) -> str | None:
+        """One note at a literal vault path, as the vault currently holds it.
+
+        The only read this application makes for a reason other than merging
+        into what it finds: :mod:`.reading_queue` reads its own note back to see
+        which boxes a person ticked. None for a note that is absent, soft-deleted
+        or torn — none of which is a queue to act on.
+        """
+        if self._client is None:
+            raise VaultUnavailable("vault.couchdb_url is not set")
+        return await self._existing_markdown(path.lower())
+
+    async def write_note(
+        self, path: str, markdown: str, *, mtime_ms: int, merge: bool = False
+    ) -> str | None:
+        """Write a note at a literal vault path, verbatim.
+
+        :meth:`project` is for files that exist under ``digest_dir`` and reach
+        the vault through its folder routing, adapted on the way in. A note that
+        is *only* ever a vault file — the reading queue — has no disk path to be
+        routed from and nothing to adapt: its wikilinks are built against paths
+        that are already correct, and running them through
+        :func:`to_vault_markdown` would be a second pass over text that has
+        already had its one.
+        """
+        if self._client is None:
+            raise VaultUnavailable("vault.couchdb_url is not set")
+        return await self._write(path, markdown, mtime_ms=mtime_ms, merge=merge)
+
+    async def _write(self, path: str, markdown: str, *, mtime_ms: int, merge: bool) -> str | None:
         if merge:
             # Against the vault, not against our own file: nothing syncs back, so
             # our copy on disk cannot know what a person — or another
@@ -604,6 +640,13 @@ async def retire_moved(vault: LiveSyncVault, episode_ids: set[str]) -> list[str]
             entry_id = str(entry["_id"])
             path = str(entry.get("path") or entry_id)
             if _under(path, vault.folder):
+                continue
+            # The reading queue sits directly under the owned root rather than
+            # in either folder below it, which is exactly the shape this sweep
+            # deletes. It is not a note left at an abandoned path; it is the one
+            # file here a person writes to, and retiring it would take their
+            # unticked queue off every device once a week.
+            if entry_id == vault.queue_note.lower():
                 continue
             if _under(path, vault.episodes_folder) and (not episode_ids or entry_id in episode_ids):
                 continue

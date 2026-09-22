@@ -167,6 +167,9 @@ scheduler:
   # 06:00, reader signals at 06:30, topics at 06:45 -- because it aggregates
   # what those just published. Only registered when vault.enabled is true.
   entities_cron: "45 6 * * fri"
+  # How long a box ticked on a phone takes to become a read mark here, once
+  # that phone is home. Also only registered when vault.enabled is true.
+  reading_queue_cron: "*/15 * * * *"
   run_on_startup: false
 
 pipeline:
@@ -361,6 +364,16 @@ vault:
   # than an undifferentiated list of several hundred files. Written only when
   # output.episode_notes is true.
   episodes_folder: 11 podcasts/episodes
+  # The unread queue: the one note this application reads back as well as
+  # writes, so unread summaries can be ticked off on a phone with no network.
+  # Directly under the root folder, "_"-prefixed so Obsidian's own name sort
+  # pins it above the folders beside it.
+  queue_note: 11 podcasts/_unread.md
+  # How many unread items it lists, and how many just-read ones stay listed
+  # under "Recently read" so a tick can be undone. The cap is a cap, not a
+  # filter: the note says how many older unread it left off.
+  queue_limit: 150
+  queue_read_limit: 20
   timeout_s: 30
 
 output:

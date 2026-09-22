@@ -49,6 +49,7 @@ from ..joblock import current_holders
 from ..logging_setup import get_logger
 from ..pipeline.runner import JobBusy, PipelineRunner, pending_routine_episodes
 from ..podcasts import PodcastRegistry
+from ..reading_queue import sync_reading_queue
 from ..retention import RetentionJob
 from ..sanitize import md_to_safe_html, safe_url
 from ..search import FIELDS as SEARCH_FIELDS
@@ -1162,6 +1163,30 @@ async def sync_vault(
         "episodes_folder": settings.vault.episodes_folder,
         "entities_folder": settings.vault.entities_folder,
     }
+
+
+@api_router.post("/vault/reading-queue", summary="Sync the vault's unread queue note")
+async def sync_reading_queue_now(request: Request) -> dict[str, Any]:
+    """Read the ticked boxes back, then re-render the queue.
+
+    The same job the scheduler runs every fifteen minutes, on demand — for
+    after a spell with the vault down, or to see a tick land without waiting
+    for the next fire. Idempotent: a queue that already says the right thing
+    is not rewritten.
+    """
+    settings = _settings(request)
+    vault = _vault(request)
+    if vault is None:
+        raise HTTPException(
+            status_code=409,
+            detail="vault.enabled is false — there is no queue note to sync.",
+        )
+    result = await sync_reading_queue(_store(request), settings, vault)
+    if error := result.get("error"):
+        # Partial progress is still progress: any tick read before the vault
+        # stopped answering is already applied to the episodes.
+        raise HTTPException(status_code=503, detail=str(error))
+    return result
 
 
 @api_router.get("/insights/precision", summary="Is the interest profile still right?")

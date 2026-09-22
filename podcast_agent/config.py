@@ -162,6 +162,11 @@ class SchedulerConfig(StrictModel):
     #: hourly because it is a full re-aggregation of the corpus and the answer
     #: only changes when new episodes are summarised.
     entities_cron: str = "45 6 * * fri"
+    #: The reading queue's poll: how long a box ticked on a phone takes to
+    #: become a read mark here, once that phone is home. Frequent because it is
+    #: the latency a person feels, and cheap — one note read, one bounded walk
+    #: of the corpus, and a write only when the queue actually changed.
+    reading_queue_cron: str = "*/15 * * * *"
     #: Kick ingest+pipeline once at boot (useful for a fresh deployment).
     run_on_startup: bool = False
 
@@ -497,6 +502,21 @@ class VaultConfig(StrictModel):
     #: note of its own. Grouped one level deeper, per show — see
     #: :func:`~..digest.episode_notes.show_folder`.
     episodes_folder: str = "11 podcasts/episodes"
+    #: The reading queue: the one note this application reads *back* as well as
+    #: writes, so unread summaries can be ticked off on a phone with no network
+    #: (see :mod:`~.reading_queue`). Directly under the application's root folder
+    #: rather than beside the digests, and `_`-prefixed so Obsidian's own name
+    #: sort pins it above the episode folders — the same convention video-digest
+    #: uses for its inbox note.
+    queue_note: str = "11 podcasts/_unread.md"
+    #: How many unread items the note lists. A cap, not a filter: the count line
+    #: says how many were left off. The backlog here runs to a few hundred, and
+    #: a note that long is not something a phone scrolls.
+    queue_limit: int = Field(default=150, ge=10, le=2000)
+    #: How many just-read items stay listed under "Recently read", so a tick can
+    #: be undone and something already read can still be starred. 0 turns the
+    #: section off.
+    queue_read_limit: int = Field(default=20, ge=0, le=200)
     #: One PUT of a file that is at most a few hundred KB; a slow answer here
     #: means the NAS or the network is unwell, not that the work is large.
     timeout_s: int = Field(default=30, ge=5, le=300)
@@ -511,6 +531,16 @@ class VaultConfig(StrictModel):
         if value is None or not value.strip():
             return None
         return _require_http_url(value)
+
+    @field_validator("queue_note")
+    @classmethod
+    def _check_queue_note(cls, value: str) -> str:
+        cleaned = value.strip().strip("/")
+        if not cleaned.lower().endswith(".md"):
+            # A path without the extension is a folder to LiveSync, and the
+            # queue would be written to one nothing opens.
+            raise ValueError("vault.queue_note must be a path ending in .md")
+        return cleaned
 
     @field_validator("folder", "entities_folder", "episodes_folder")
     @classmethod

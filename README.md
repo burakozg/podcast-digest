@@ -58,6 +58,9 @@ after each entry is what adopting it takes on a deployment already running.
        overwritten. See DEPLOY-NAS.md, "Redeploying after a code change".
      - Full history is git log. This list never claims completeness. -->
 
+- Unread summaries — podcasts and imported videos both — are listed as tappable
+  checkboxes in one vault note, so they can be read, marked read and starred on a
+  phone with no network; the taps come back into the console — *rebuild*
 - A long episode no longer stops the transcript queue: audio is sent to the
   transcriber in 20-minute chunks, so its memory no longer scales with episode
   length, and anything over four hours is summarised from its description
@@ -76,9 +79,6 @@ after each entry is what adopting it takes on a deployment already running.
   `NAS_LAN_IP` becomes `APP_LAN_IP` in the NAS `.env` (the old name still works)*
 - Archive episodes stay queued instead of erroring when the transcriber is
   asleep ([`4b1385b`](../../commit/4b1385b)) — *rebuild*
-- Summaries come from Qwen3.8 27B, with its thinking turned off so a truncated
-  reply cannot burn the tier's retry budget ([`8a92715`](../../commit/8a92715))
-  — *restart*
 - Initial release: ingestion, two-tier triage, ASR, weekly digest, consoles
   ([`56a8761`](../../commit/56a8761))
 
@@ -728,6 +728,7 @@ on, or for whatever an outage missed.
 
 ```
 11 podcasts/
+  _unread.md
   digests/
     2026/podcast-digest-2026-W35.md
     signals/2026-W35.md
@@ -789,6 +790,64 @@ The document format is reverse-engineered rather than published, so
 [`tests/test_vault.py`](tests/test_vault.py) pins it — if a plugin upgrade
 changes the shape, those assertions are what will say so.
 
+### The unread queue: reading and marking on a phone, offline
+
+The console has unread-only browsing, starring and read marking, and none of it
+is reachable from a phone that is not on the LAN. An offline web app would need
+a service worker, which needs HTTPS, which needs a certificate for a domain that
+cannot have one. But the summaries are *already* on the phone — every one has a
+note in the vault — so the only things missing are which of them are unread and
+somewhere to tap.
+
+`11 podcasts/_unread.md` is both. It lists every unread summary as a Markdown
+task, podcasts and imported videos alike, and Obsidian toggles a checkbox with
+one tap in reading view, offline:
+
+```markdown
+## Podcasts · 28
+
+- [ ] [[11 podcasts/episodes/Risky Business/2026-09-18-....md|When companies hack back]] · Risky Business · 18 Sep 2026
+	- [ ] ⭐
+```
+
+Tick the box to mark it read; tick the indented one to star it. LiveSync carries
+the edited file home the next time that phone sees the LAN, and within fifteen
+minutes the mark is on the episode itself — the console, the signals export and
+the precision report all see it as if you had clicked it there. Items that leave
+the queue stay listed under **Recently read** for a while, so a mistaken tick can
+be undone and something you have just read can still be starred.
+
+Nothing else here reads the vault; this note is the one exception, and the rule
+that keeps it honest is worth stating:
+
+- **A box that differs from what was last written is your tap, and it wins.** A
+  box that still says what was written carries no intent, so the database wins
+  and the line is re-rendered from it. What was last written is *recorded*, not
+  inferred, so a tap on the train and a click in the console between two polls
+  do not have to be told apart by guesswork.
+- **Your own writing in that note survives.** Only the region between the
+  ownership markers is replaced, the same contract the shared topic notes use, so
+  a heading or a note-to-self above the list stays where you put it.
+- **Only episodes whose note is in the vault are listed** — a queue line you
+  cannot open is worse than an absent one.
+- **Delete the note and it stays deleted**, like every other note here. The queue
+  stops updating until you put it back.
+
+One limitation, because it is invisible in the data: nothing records *when* a box
+was ticked, only that the file changed. A week's reading done offline lands as
+one moment, and `read_at` is when the poll saw it rather than when you read it.
+
+```yaml
+vault:
+  queue_note: 11 podcasts/_unread.md   # `_` pins it to the top of the folder
+  queue_limit: 150                     # unread items listed; the rest are counted
+  queue_read_limit: 20                 # how many stay under "Recently read"
+scheduler:
+  reading_queue_cron: "*/15 * * * *"
+```
+
+`POST /api/v1/vault/reading-queue` runs the same pass on demand.
+
 ### Reader marks, for something else to read
 
 Stars and wrong-call flags are useful to the console and invisible to anything
@@ -844,6 +903,7 @@ calling it twice does not repeat a mark.
 | `POST /api/v1/entities/notes` | Rebuild the topic notes and project them (`?min_mentions=`) |
 | `POST /api/v1/signals/export` | Mirror starred/flagged episodes into `reading-signals.md` |
 | `POST /api/v1/vault/sync` | Project digests, signals, episode notes and topic notes into the Obsidian vault (409 when `vault.enabled` is false) |
+| `POST /api/v1/vault/reading-queue` | Read the unread queue note's ticked boxes back, then re-render it (409 when `vault.enabled` is false) |
 | `GET /api/v1/content/seeds` | Preview which episodes qualify as writing material (no model call) |
 | `POST /api/v1/content/seeds` | Find openings worth writing about → `content-seeds.md` |
 | `GET /api/v1/digests` | Every digest generated, newest week first |

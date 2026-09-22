@@ -43,6 +43,7 @@ from .net import UrlGuard, build_client
 from .notify import Notifier
 from .pipeline.runner import PipelineRunner
 from .podcasts import PodcastRegistry
+from .reading_queue import sync_reading_queue
 from .retention import RetentionJob
 from .scheduler import build_scheduler, drain_jobs, mark_shutting_down
 from .search import SearchIndex
@@ -352,6 +353,13 @@ def build_app(settings: Settings, *, store: Store | None = None, llm: Any = None
         app.state.video_digest_import = import_video_digest
         app.state.video_digest_configured = video_importer.configured()
 
+        async def sync_reading_queue_job() -> dict[str, Any]:
+            """Carry the vault queue note's ticked boxes back in, then re-render
+            it. The one job that reads the vault — see reading_queue.py."""
+            return await sync_reading_queue(active_store, active_settings, vault)
+
+        app.state.reading_queue_sync = sync_reading_queue_job
+
         scheduler = build_scheduler(
             active_settings,
             runner,
@@ -368,6 +376,9 @@ def build_app(settings: Settings, *, store: Store | None = None, llm: Any = None
             # Not registered unless configured, so an unconfigured integration
             # costs no wakeups and cannot log a failure every hour.
             video_digest=import_video_digest if video_importer.configured() else None,
+            # Same rule: with no vault there is no note to tick, and a poll
+            # every fifteen minutes would only log that fact.
+            reading_queue=sync_reading_queue_job if active_settings.vault.enabled else None,
         )
         scheduler.start()
         app.state.scheduler = scheduler
