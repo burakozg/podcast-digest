@@ -533,7 +533,10 @@ class TestAnAliasAdoptsAnExistingPage:
         vault = _FakeVaultListing(["99 topics/shinyhunters.md", "99 topics/fortinet.md"])
 
         names = await resolve_note_names(
-            store, [entity], vault=vault, entities_folder="99 topics"  # type: ignore[arg-type]
+            store,
+            [entity],
+            vault=vault,
+            entities_folder="99 topics",  # type: ignore[arg-type]
         )
 
         assert names[entity.key] == "shinyhunters"
