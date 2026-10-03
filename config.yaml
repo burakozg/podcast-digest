@@ -427,6 +427,8 @@ security:
     - prxu.org           # PRX — Darknet Diaries transcripts and audio
     - mgln.ai            # Megaphone prefix — Unsupervised Learning audio
     - redcircle.com      # Smashing Security audio
+    - op3.dev            # OP3 analytics prefix — Smashing Security audio, all enclosures since
+                         # Sep 2026; a plain 302 to audio4.redcircle.com, which is already here
     - podtrac.com        # Risky Business / Darknet Diaries prefix
     - blubrry.com        # Defensive Security audio
     # Outermost prefix of a swap.fm -> mgln.ai -> podtrac -> prxu.org chain
