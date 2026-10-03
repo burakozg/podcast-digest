@@ -49,7 +49,7 @@ from .scheduler import build_scheduler, drain_jobs, mark_shutting_down
 from .search import SearchIndex
 from .settings_store import allowed_api_base_hosts, check_api_bases, get_overrides, mark_applied
 from .signals import export_new_marks
-from .speech import build_speech_backend
+from .speech import SpeechUnavailable, build_speech_backend
 from .summarize.tier1 import Tier1Stage
 from .transcripts.acquire import TranscriptAcquirer
 from .transcripts.asr import build_asr_backend
@@ -331,8 +331,27 @@ def build_app(settings: Settings, *, store: Store | None = None, llm: Any = None
             Never a specific week — an hourly job that could name one would walk
             backwards through the archive. Older weeks are narrated only when a
             person asks for one from the console.
+
+            `SpeechUnavailable` is swallowed here, the same way `sync_all`'s
+            caller above swallows `VaultUnavailable` and for the same reason: the
+            digest is written and perfectly good, and the speech server is a
+            laptop that is *expected* to be asleep most of the time. Letting it
+            reach the scheduler's guard logged `scheduler.job_failed` with a
+            traceback 24 times a day — `logstore` keeps every one of those (and
+            only collapses duplicates inside a single 5-second drain, so hourly
+            fires never collapse), which is a lot of stored noise for the normal
+            state of a closed lid, and it buries the failures that mean
+            something. Deferring is not failing; the next hour picks it up.
+
+            Only the *scheduled* path is quiet. `POST /digests/{key}/narrate`
+            still surfaces the error to whoever clicked it, which is where an
+            operator actually wants to hear that the server is down.
             """
-            return await runner.narrate_digest()
+            try:
+                return await runner.narrate_digest()
+            except SpeechUnavailable as exc:
+                log.error("narrate.deferred", error=str(exc))
+                return {"skipped": True, "reason": "speech backend unavailable"}
 
         video_importer = VideoDigestImporter(active_settings, app.state.store)
 

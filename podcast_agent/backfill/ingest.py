@@ -32,6 +32,7 @@ from ..ingest.feeds import (
     _stable_guid,
     _title,
     _transcripts_from_raw_xml,
+    find_same_episode,
 )
 from ..logging_setup import get_logger
 from ..net import FetchPolicy, UrlGuard, UrlRejected, get_guarded
@@ -55,6 +56,7 @@ class BackfillStats:
     #: finished — so the caller can say so rather than implying completion.
     stopped_early: bool = False
     episodes_existing: int = 0
+    episodes_duplicate: int = 0
     without_transcript: int = 0
     skipped_unsupported: int = 0
     errors: list[str] = field(default_factory=list)
@@ -69,6 +71,7 @@ class BackfillStats:
             "episodes_created": self.episodes_created,
             "stopped_early": self.stopped_early,
             "episodes_existing": self.episodes_existing,
+            "episodes_duplicate": self.episodes_duplicate,
             "without_transcript": self.without_transcript,
             "skipped_unsupported": self.skipped_unsupported,
             "error_count": len(self.errors),
@@ -306,6 +309,10 @@ class BackfillIngestor:
             if await self._store.get(doc_id) is not None:
                 stats.episodes_existing += 1
                 continue
+            title = html_to_text(_title(entry), max_chars=500) or "(untitled)"
+            if await find_same_episode(self._store, podcast.slug, published, title) is not None:
+                stats.episodes_duplicate += 1
+                continue
             if dry_run:
                 created += 1
                 stats.episodes_created += 1
@@ -325,7 +332,7 @@ class BackfillIngestor:
                 "podcast_slug": podcast.slug,
                 "podcast_name": podcast.name,
                 "guid": guid,
-                "title": html_to_text(_title(entry), max_chars=500) or "(untitled)",
+                "title": title,
                 "link": _entry_link(entry),
                 "description_raw": html_to_text(
                     _description(entry),

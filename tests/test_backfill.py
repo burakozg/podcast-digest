@@ -1728,6 +1728,34 @@ class TestRewind:
         assert second.episodes_existing == 1
         assert len(store.docs_of_type("episode")) == 1
 
+    @respx.mock
+    async def test_an_episode_re_keyed_by_its_publisher_is_not_walked_in_again(
+        self, tmp_path: Path, store: MemoryStore
+    ) -> None:
+        """A new GUID for an episode already held is the same episode.
+
+        The routine poller and the archive walk share one id scheme, and both
+        broke the same way when a feed's GUIDs changed.
+        """
+        settings = archive_settings(tmp_path)
+        published = datetime(2026, 6, 10, tzinfo=UTC)
+        entry = {"guid": "a", "title": "One", "published": published}
+        respx.get(FEED_URL).mock(return_value=httpx.Response(200, text=feed_with([entry])))
+        await self._seed(store)
+        await ingestor(settings, store).run(now=NOW)
+
+        respx.get(FEED_URL).mock(
+            return_value=httpx.Response(
+                200, text=feed_with([{**entry, "guid": "a-after-the-host-moved"}])
+            )
+        )
+        await rewind_cursors(store)
+        again = await ingestor(settings, store).run(now=NOW)
+
+        assert again.episodes_created == 0
+        assert again.episodes_duplicate == 1
+        assert len(store.docs_of_type("episode")) == 1
+
 
 class TestWhatPauseActuallyStops:
     """Pause is not "stop starting new rounds"; it is "stop".

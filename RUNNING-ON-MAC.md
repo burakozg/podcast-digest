@@ -150,6 +150,24 @@ curl -s localhost:8880/v1/audio/speech -H 'Content-Type: application/json' \
   --output /tmp/t.mp3 && afplay /tmp/t.mp3
 ```
 
+**Then install it as a service, rather than leaving that terminal open:**
+
+```bash
+./scripts/install-kokoro-service.sh             # LaunchAgent, starts at login
+./scripts/install-kokoro-service.sh --status    # loaded? answering?
+```
+
+The foreground command above survives nothing — not a reboot, not closing the
+window. That is how speech stayed down for three days once: the digests kept
+being written and looked perfectly healthy, and the only evidence was the agent's
+hourly narration job logging a connection error to a port with nothing behind it.
+The LaunchAgent gives it `KeepAlive`, so a crash comes back on its own.
+
+A LaunchAgent rather than a LaunchDaemon, deliberately: Metal needs a logged-in
+GUI session, and a daemon that starts before login gets no GPU at all. So speech
+is still down between a reboot and someone logging in — which is exactly the gap
+the hourly retry already covers.
+
 Then point the agent at it and turn it on:
 
 ```bash
@@ -165,6 +183,15 @@ The hourly cadence is not about the digest, which is weekly. It is about this
 machine: a job that fired once on Friday morning and found the lid shut would
 wait a week to retry. It returns after a single document read when the audio is
 already there.
+
+Because that retry is normal, an unreachable speech server is logged as a
+one-line `narrate.deferred` and nothing else — not a `scheduler.job_failed` with
+a traceback. `logstore` persists every warning and error, and only collapses
+duplicates inside a single five-second drain, so hourly fires never collapse: a
+closed lid over a long weekend used to write a tracebackful row an hour, which is
+how a genuine failure gets buried. The console's own
+`POST /digests/{week}/narrate` still reports the error to whoever clicked it,
+which is where an operator is actually asking.
 
 ## Model notes (learned the hard way on this machine)
 

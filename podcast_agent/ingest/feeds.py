@@ -60,6 +60,9 @@ class IngestStats:
     entries_seen: int = 0
     episodes_created: int = 0
     episodes_existing: int = 0
+    #: Entries whose GUID is new but which are an episode we already hold. See
+    #: :func:`find_same_episode`.
+    episodes_duplicate: int = 0
     entries_too_old: int = 0
     entries_unsupported: int = 0
     errors: list[str] = field(default_factory=list)
@@ -73,6 +76,7 @@ class IngestStats:
             "entries_seen": self.entries_seen,
             "episodes_created": self.episodes_created,
             "episodes_existing": self.episodes_existing,
+            "episodes_duplicate": self.episodes_duplicate,
             "entries_too_old": self.entries_too_old,
             "entries_unsupported": self.entries_unsupported,
             "error_count": len(self.errors),
@@ -323,6 +327,19 @@ class Ingestor:
             stats.episodes_existing += 1
             return
 
+        title = html_to_text(_title(entry), max_chars=500) or "(untitled)"
+        twin = await find_same_episode(self._store, podcast.slug, published, title)
+        if twin is not None:
+            stats.episodes_duplicate += 1
+            log.info(
+                "ingest.duplicate_of",
+                podcast=podcast.slug,
+                existing_id=twin["_id"],
+                new_guid=guid[:200],
+                title=title[:100],
+            )
+            return
+
         safe_enclosure = self._checked(podcast, enclosure_url)
         if safe_enclosure is None:
             stats.entries_unsupported += 1
@@ -344,7 +361,7 @@ class Ingestor:
             "podcast_slug": podcast.slug,
             "podcast_name": podcast.name,
             "guid": guid,
-            "title": html_to_text(_title(entry), max_chars=500) or "(untitled)",
+            "title": title,
             "link": _entry_link(entry),
             "description_raw": html_to_text(
                 _description(entry), max_chars=self._settings.pipeline.description_max_chars
@@ -512,6 +529,38 @@ def _entry_link(entry: Any) -> str | None:
     if isinstance(link, str) and link.startswith(("http://", "https://")):
         return link
     return None
+
+
+def _title_key(title: str) -> str:
+    return " ".join(title.casefold().split())
+
+
+async def find_same_episode(
+    store: Store, slug: str, published: datetime | None, title: str
+) -> Doc | None:
+    """The episode we already hold under a different GUID, if this is one.
+
+    The episode id is ``sha256(slug + guid)``, so it is only as stable as the
+    GUID — and a GUID is not always stable. Some feeds publish the enclosure URL
+    as the GUID, and when the show changed host (Security Now, Megaphone to
+    Captivate, 2026-09) every URL changed, every episode got a new id, and nine
+    already-summarised episodes were ingested, summarised and digested a second
+    time. Same show, same publish instant and same title is the same episode
+    whatever it is called now.
+
+    Both halves are required. Publish time alone is not identity — a publisher
+    releasing a batch stamps every item with one instant — and an untitled
+    episode has nothing to compare, so it never matches.
+    """
+    if published is None or title == "(untitled)":
+        return None
+    rows = await store.find(
+        {"type": "episode", "podcast_slug": slug, "published_at": iso(published)},
+        fields=["_id", "title"],
+        limit=50,
+    )
+    wanted = _title_key(title)
+    return next((row for row in rows if _title_key(str(row.get("title") or "")) == wanted), None)
 
 
 def _stable_guid(entry: Any, enclosure_url: str | None) -> str | None:

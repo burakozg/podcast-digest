@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -12,13 +14,14 @@ import respx
 from fastapi.testclient import TestClient
 from helpers import make_episode, make_settings
 
-from podcast_agent.config import TTSConfig
+from podcast_agent.config import LoggingConfig, TTSConfig
 from podcast_agent.db import MemoryStore
 from podcast_agent.digest.narrate import (
     DigestNarrator,
     NothingToNarrate,
     chunk_script,
 )
+from podcast_agent.logging_setup import configure_logging
 from podcast_agent.main import build_app
 from podcast_agent.speech import OpenAISpeechBackend, SpeechUnavailable, build_speech_backend
 from podcast_agent.utils import digest_doc_id, episode_doc_id, iso_now
@@ -501,3 +504,60 @@ class TestTheJobIsOnlyRegisteredWhenItCanRun:
         assert "digest_narrate" not in jobs
         # The rest of the schedule is untouched by the feature being off.
         assert {"ingest", "pipeline", "digest_weekly"} <= jobs
+
+
+class TestASleepingSpeechServerIsNotAJobFailure:
+    """The hourly fire finding the laptop asleep is the normal case, not an error.
+
+    This ran for days as `scheduler.job_failed` + a traceback, once an hour,
+    every one of them stored by `logstore` — the noise that hides a real
+    failure. The scheduled job defers; the console endpoint still reports.
+    """
+
+    @pytest.fixture
+    def _stdlib_logging(self):
+        """Pin the log route so the assertions below are not order-dependent.
+
+        `capture_logs` only sees events while structlog's own chain is in use, and
+        whether it is depends on whether some earlier test called
+        `configure_logging`. Configuring it here sends events through stdlib,
+        where `caplog` always finds them. Root handlers are restored so this
+        cannot leak, the same guard `test_logging.py` uses.
+        """
+        root = logging.getLogger()
+        saved_handlers, saved_level = root.handlers[:], root.level
+        configure_logging(LoggingConfig(level="INFO", format="console"))
+        yield
+        root.handlers[:] = saved_handlers
+        root.setLevel(saved_level)
+
+    def test_it_defers_instead_of_failing(
+        self,
+        tmp_path: Path,
+        store: MemoryStore,
+        caplog: pytest.LogCaptureFixture,
+        _stdlib_logging: None,
+    ) -> None:
+        from helpers import FakeLLM
+
+        async def asleep(*args: Any, **kwargs: Any) -> Any:
+            raise SpeechUnavailable("speech:http://mac.lan:8880 unreachable: ConnectError")
+
+        settings = make_settings(tmp_path, tts={"enabled": True, "base_url": "http://mac.lan:8880"})
+        app = build_app(settings, store=store, llm=FakeLLM())
+        with TestClient(app):
+            app.state.runner.narrate_digest = asleep
+            job = app.state.scheduler.get_job("digest_narrate")
+
+        # Driven outside the client's lifespan on a loop of its own: the stub
+        # raises before touching anything the app owns, and running it inside
+        # would leave the shutdown drain gathering a task from another loop.
+        with caplog.at_level(logging.INFO):
+            asyncio.run(job.func())
+
+        assert "narrate.deferred" in caplog.text, "the deferral must still be visible"
+        assert "scheduler.job_failed" not in caplog.text, (
+            "a sleeping laptop must not be recorded as a scheduler failure"
+        )
+        assert "unreachable" in caplog.text, "the reason must survive into the log"
+        assert "Traceback" not in caplog.text, "no traceback for an expected condition"

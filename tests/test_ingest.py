@@ -187,6 +187,63 @@ class TestIdempotency:
         assert after["status"] == EpisodeStatus.PUBLISHED.value
 
 
+class TestAChangedGuidIsNotANewEpisode:
+    """A publisher that re-keys its feed must not re-ingest what we already hold.
+
+    Security Now publishes the enclosure URL as the GUID. When the show changed
+    host every URL changed, every id changed, and nine summarised episodes were
+    ingested, summarised and digested a second time.
+    """
+
+    @respx.mock
+    async def test_same_show_instant_and_title_is_the_same_episode(
+        self, one_show_settings, store: MemoryStore
+    ) -> None:
+        respx.get(FEED_URL).mock(return_value=httpx.Response(200, text=FEED))
+        await run_ingest(one_show_settings, store)
+
+        rekeyed = FEED.replace("ep-3-guid", "ep-3-moved-host").replace("ep-2-guid", "ep-2-moved")
+        respx.get(FEED_URL).mock(return_value=httpx.Response(200, text=rekeyed))
+        stats = await run_ingest(one_show_settings, store)
+
+        assert stats.episodes_created == 0  # type: ignore[attr-defined]
+        assert stats.episodes_duplicate == 2  # type: ignore[attr-defined]
+        assert len(store.docs_of_type("episode")) == 2
+
+    @respx.mock
+    async def test_a_different_title_at_the_same_instant_is_a_different_episode(
+        self, one_show_settings, store: MemoryStore
+    ) -> None:
+        """Publish time alone is not identity: a batch release shares one instant."""
+        respx.get(FEED_URL).mock(return_value=httpx.Response(200, text=FEED))
+        await run_ingest(one_show_settings, store)
+
+        sibling = FEED.replace("ep-3-guid", "ep-3b-guid").replace(
+            "Ep 3: PLC malware in water utilities", "Ep 3b: Bonus, released alongside"
+        )
+        respx.get(FEED_URL).mock(return_value=httpx.Response(200, text=sibling))
+        stats = await run_ingest(one_show_settings, store)
+
+        assert stats.episodes_created == 1  # type: ignore[attr-defined]
+        assert stats.episodes_duplicate == 0  # type: ignore[attr-defined]
+
+    @respx.mock
+    async def test_the_title_comparison_ignores_case_and_spacing(
+        self, one_show_settings, store: MemoryStore
+    ) -> None:
+        respx.get(FEED_URL).mock(return_value=httpx.Response(200, text=FEED))
+        await run_ingest(one_show_settings, store)
+
+        retitled = FEED.replace("ep-3-guid", "ep-3-moved").replace(
+            "Ep 3: PLC malware in water utilities", "EP 3:  PLC malware  in water utilities"
+        )
+        respx.get(FEED_URL).mock(return_value=httpx.Response(200, text=retitled))
+        stats = await run_ingest(one_show_settings, store)
+
+        assert stats.episodes_duplicate == 1  # type: ignore[attr-defined]
+        assert stats.episodes_created == 0  # type: ignore[attr-defined]
+
+
 class TestConditionalGet:
     @respx.mock
     async def test_stores_and_replays_validators(
