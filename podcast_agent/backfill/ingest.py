@@ -39,7 +39,7 @@ from ..net import FetchPolicy, UrlGuard, UrlRejected, get_guarded
 from ..podcasts import PodcastRecord, PodcastRegistry
 from ..sanitize import html_to_text
 from ..state import BACKFILL_ORIGIN, EpisodeStatus
-from ..utils import episode_doc_id, iso, iso_now, podcast_doc_id
+from ..utils import episode_doc_id, iso, iso_now, podcast_doc_id, tombstone_doc_id
 
 log = get_logger(__name__)
 
@@ -307,6 +307,9 @@ class BackfillIngestor:
 
             doc_id = episode_doc_id(podcast.slug, guid)
             if await self._store.get(doc_id) is not None:
+                stats.episodes_existing += 1
+                continue
+            if await self._store.get(tombstone_doc_id(doc_id)) is not None:
                 stats.episodes_existing += 1
                 continue
             title = html_to_text(_title(entry), max_chars=500) or "(untitled)"

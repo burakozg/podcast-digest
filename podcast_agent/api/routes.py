@@ -49,6 +49,7 @@ from ..joblock import current_holders
 from ..logging_setup import get_logger
 from ..pipeline.runner import JobBusy, PipelineRunner, pending_routine_episodes
 from ..podcasts import PodcastRegistry
+from ..purge import purge_low_scoring
 from ..reading_queue import sync_reading_queue
 from ..retention import RetentionJob
 from ..sanitize import md_to_safe_html, safe_url
@@ -573,6 +574,20 @@ async def run_rescore(
         return {"job": "rescore", "result": await runner.run_rescore(limit=limit, force=force)}
     except JobBusy as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@api_router.post("/runs/purge", summary="Delete a show's low-scoring episodes (dry run by default)")
+async def run_purge(
+    request: Request,
+    podcast: str = Query(description="Podcast slug"),
+    max_score: int = Query(ge=0, le=10, description="Delete episodes scored this or lower"),
+    dry_run: bool = Query(default=True, description="Count only; delete nothing"),
+) -> dict[str, Any]:
+    """Irreversible apart from the nightly backup. Leaves tombstones so feeds cannot revive them."""
+    result = await purge_low_scoring(
+        _store(request), podcast_slug=podcast, max_score=max_score, dry_run=dry_run
+    )
+    return {"job": "purge", "result": result}
 
 
 @api_router.post("/runs/retention", summary="Run retention cleanup now")

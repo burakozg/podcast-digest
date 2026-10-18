@@ -51,6 +51,11 @@ def episode_doc_id(podcast_slug: str, guid: str) -> str:
     return f"episode:{digest}"
 
 
+def tombstone_doc_id(episode_id: str) -> str:
+    """The marker left behind when an episode is purged on purpose."""
+    return f"tombstone:{episode_id}"
+
+
 def podcast_doc_id(slug: str) -> str:
     return f"podcast:{slug}"
 

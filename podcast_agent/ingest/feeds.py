@@ -26,7 +26,15 @@ from ..net import FetchPolicy, UrlGuard, UrlRejected, get_guarded
 from ..podcasts import PodcastRecord, PodcastRegistry
 from ..sanitize import html_to_text
 from ..state import ROUTINE_ORIGIN, EpisodeStatus
-from ..utils import episode_doc_id, iso, iso_now, parse_iso, podcast_doc_id, utcnow
+from ..utils import (
+    episode_doc_id,
+    iso,
+    iso_now,
+    parse_iso,
+    podcast_doc_id,
+    tombstone_doc_id,
+    utcnow,
+)
 
 log = get_logger(__name__)
 
@@ -324,6 +332,10 @@ class Ingestor:
         doc_id = episode_doc_id(podcast.slug, guid)
         # Cheap existence probe keeps the hot path (nothing new) to one GET.
         if await self._store.get(doc_id) is not None:
+            stats.episodes_existing += 1
+            return
+        if await self._store.get(tombstone_doc_id(doc_id)) is not None:
+            # Purged on purpose; a feed that still lists it is not a reason to bring it back.
             stats.episodes_existing += 1
             return
 
