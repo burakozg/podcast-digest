@@ -231,6 +231,22 @@ def summary_view(
     }
 
 
+def holds_live_claim(episode: Doc) -> bool:
+    """Whether a digest has already listed this episode and is done with it.
+
+    A claim on an audit-only episode (scored low, dropped, failed) is live: it
+    was listed once, as an audit row, and must not be listed again. But claiming
+    a digestable episode always moves it to PUBLISHED in the same write, so one
+    still READY_FOR_DIGEST or DIGEST_DIRECT with a ``digest_id`` was promoted
+    *after* being claimed — re-scored up from low, or retried out of an error —
+    and its claim describes an earlier, different listing. It never reached a
+    digest as the thing it now is, so the claim is stale and it is still owed one.
+    """
+    if not episode.get("digest_id"):
+        return False
+    return episode.get("status") not in {s.value for s in DIGESTABLE_STATUSES}
+
+
 class DigestGenerator:
     def __init__(
         self,
@@ -275,7 +291,7 @@ class DigestGenerator:
             if reconciled is not None:
                 return reconciled
 
-        candidates = await self._collect(period_from, period_to)
+        candidates = await self._collect(period_from, period_to, exclude_digest_id=digest_id)
         buckets = self._bucket(candidates, period_from)
         stats = await self._stats(candidates)
         synthesis = await self._synthesize(candidates, period_from, period_to)
@@ -434,7 +450,16 @@ class DigestGenerator:
             previous_themes=previous_theme_titles(previous[0] if previous else None),
         )
 
-    async def _collect(self, period_from: datetime, period_to: datetime) -> list[Doc]:
+    async def _has_earlier_digest(self, *, exclude: str | None) -> bool:
+        rows = await self._store.find({"type": "digest"}, fields=["_id"], limit=2)
+        return any(row["_id"] != exclude for row in rows)
+
+    async def _collect(
+        self,
+        period_from: datetime,
+        period_to: datetime,
+        exclude_digest_id: str | None = None,
+    ) -> list[Doc]:
         """Unclaimed episodes up to ``period_to``, newest first.
 
         Selection keys off ``digest_id`` rather than status so that audit-only
@@ -456,6 +481,31 @@ class DigestGenerator:
             sort=typed_sort("published_at", "desc"),
             limit=1000,
         )
+        # Waiting for a digest, however old. The window above is a publish-date
+        # bound, and an episode that only finished summarising weeks after it was
+        # published is behind every later window — it sat READY_FOR_DIGEST
+        # indefinitely, listed nowhere. Includes the ones holding a stale claim;
+        # see :func:`holds_live_claim`.
+        #
+        # Skipped for a first-ever digest, which is what the floor is for: a
+        # fresh install's initial ingest must not land in digest one.
+        if await self._has_earlier_digest(exclude=exclude_digest_id):
+            seen = {d["_id"] for d in docs}
+            for status in DIGESTABLE_STATUSES:
+                waiting = await self._store.find(
+                    {
+                        "type": "episode",
+                        "status": status.value,
+                        **ROUTINE_ONLY,
+                        "published_at": {"$lt": iso(period_to)},
+                    },
+                    sort=typed_sort("published_at", "desc"),
+                    limit=1000,
+                )
+                docs.extend(d for d in waiting if d["_id"] not in seen)
+                seen.update(d["_id"] for d in waiting)
+            docs.sort(key=lambda d: d.get("published_at") or "", reverse=True)
+
         # Episodes still mid-pipeline are left for the next digest, which can now
         # actually reach them.
         pending = {
@@ -580,7 +630,7 @@ class DigestGenerator:
         marked = 0
         for episode_id in episode_ids:
             episode = await self._store.get(episode_id)
-            if episode is None or episode.get("digest_id"):
+            if episode is None or holds_live_claim(episode):
                 continue
             status = EpisodeStatus(episode["status"])
 

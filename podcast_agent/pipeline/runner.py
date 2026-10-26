@@ -294,6 +294,14 @@ class PipelineRunner:
         started = time.perf_counter()
         try:
             result = await self._digest.generate(since=since, until=until, dry_run=dry_run)
+            if not dry_run and self._archive is not None:
+                # Archive episodes promoted after their month was written are
+                # otherwise only settled during a backfill walk, which may be
+                # paused or finished for good. Never worth failing a digest over.
+                try:
+                    await self._archive.settle_promoted()
+                except Exception as exc:
+                    log.warning("archive.settle_skipped", error=str(exc))
             summary = {
                 **result.as_dict(),
                 "wall_ms": int((time.perf_counter() - started) * 1000),

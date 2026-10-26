@@ -576,6 +576,47 @@ class TestArchiveDigest:
         assert result.episodes_published == 0
 
 
+class TestArchiveEpisodesPromotedAfterTheirMonth:
+    async def test_are_settled_rather_than_left_waiting_for_a_digest(
+        self, tmp_path: Path, store: MemoryStore
+    ) -> None:
+        """The month's file is never rewritten, so READY_FOR_DIGEST could never drain."""
+        settings = archive_settings(tmp_path)
+        store.seed(
+            make_episode(
+                guid="promoted",
+                status=S.READY_FOR_DIGEST,
+                origin=BACKFILL_ORIGIN,
+                archive_month="2026-06",
+                digest_id="archive:test-show:2026-06",
+            )
+        )
+        result = await ArchiveDigestGenerator(settings, store).generate()
+        assert result.settled == 1
+        doc = await store.get(make_episode(guid="promoted")["_id"])
+        assert doc is not None
+        assert doc["status"] == S.PUBLISHED.value
+        assert doc["digest_id"] == "archive:test-show:2026-06"
+        assert doc["summary_after_listing"] is True
+
+    async def test_a_dry_run_settles_nothing(self, tmp_path: Path, store: MemoryStore) -> None:
+        settings = archive_settings(tmp_path)
+        store.seed(
+            make_episode(
+                guid="promoted",
+                status=S.READY_FOR_DIGEST,
+                origin=BACKFILL_ORIGIN,
+                archive_month="2026-06",
+                digest_id="archive:test-show:2026-06",
+            )
+        )
+        result = await ArchiveDigestGenerator(settings, store).generate(dry_run=True)
+        assert result.settled == 0
+        doc = await store.get(make_episode(guid="promoted")["_id"])
+        assert doc is not None
+        assert doc["status"] == S.READY_FOR_DIGEST.value
+
+
 class TestEstimateAndConfirmation:
     async def test_refuses_to_run_without_confirmation(
         self, tmp_path: Path, store: MemoryStore

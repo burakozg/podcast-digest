@@ -45,6 +45,8 @@ class ArchiveResult:
     #: Months whose file already existed but whose episodes were not fully
     #: claimed — an interrupted previous run, finished rather than repeated.
     reconciled: int = 0
+    #: Episodes that were promoted after their month was written, now settled.
+    settled: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -53,6 +55,7 @@ class ArchiveResult:
             "months_skipped_incomplete": self.months_skipped_incomplete,
             "episodes_published": self.episodes_published,
             "reconciled": self.reconciled,
+            "settled": self.settled,
         }
 
 
@@ -67,6 +70,8 @@ class ArchiveDigestGenerator:
 
     async def generate(self, *, dry_run: bool = False) -> ArchiveResult:
         result = ArchiveResult()
+        if not dry_run:
+            result.settled = await self.settle_promoted()
         episodes = await self._store.find(
             {"type": "episode", "origin": BACKFILL_ORIGIN, "digest_id": None},
             sort=typed_sort("published_at", "desc"),
@@ -90,6 +95,41 @@ class ArchiveDigestGenerator:
 
         log.info("archive.generated", dry_run=dry_run, **result.as_dict())
         return result
+
+    async def settle_promoted(self) -> int:
+        """Finish episodes promoted after their month's file was written.
+
+        A month's file is never rewritten, so an episode listed in it as a low
+        score or a failure and later re-scored up, or retried to a summary, is
+        left READY_FOR_DIGEST holding a claim that no archive will ever act on —
+        a queue entry that cannot drain. Settled the way the console already
+        treats a summary added after listing: PUBLISHED, claim kept, flagged. The
+        summary itself is in the database and in the episode's own note; only the
+        file on disk predates it.
+        """
+
+        def _apply(doc: Doc) -> None:
+            doc["summary_after_listing"] = True
+
+        settled = 0
+        for status in (EpisodeStatus.READY_FOR_DIGEST, EpisodeStatus.DIGEST_DIRECT):
+            rows = await self._store.find(
+                {"type": "episode", "origin": BACKFILL_ORIGIN, "status": status.value},
+                limit=5000,
+            )
+            for episode in rows:
+                if not episode.get("digest_id"):
+                    continue
+                try:
+                    await transition(
+                        self._store, episode["_id"], EpisodeStatus.PUBLISHED, mutate=_apply
+                    )
+                    settled += 1
+                except Exception as exc:
+                    log.warning("archive.settle_failed", episode_id=episode["_id"], error=str(exc))
+        if settled:
+            log.info("archive.settled", episodes=settled)
+        return settled
 
     async def _write_month(
         self,

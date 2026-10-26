@@ -269,6 +269,97 @@ class TestAtomicWrites:
         assert second.file_path.name.endswith("-r2.md")
 
 
+class TestEpisodesThatFinishLate:
+    """An episode ready for a digest is owed one, however old or however claimed.
+
+    Once there has been a digest at all: the first-ever one keeps the floor, so
+    a fresh install's initial ingest does not land in it.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _an_earlier_digest(self, store: MemoryStore) -> None:
+        store.seed({"_id": "digest:2026-W10", "type": "digest", "generated_at": "2026-03-06"})
+
+    async def test_the_first_ever_digest_keeps_the_floor(
+        self, settings, store: MemoryStore
+    ) -> None:
+        await store.delete("digest:2026-W10", (await store.get("digest:2026-W10"))["_rev"])  # type: ignore[index]
+        store.seed(
+            make_episode(
+                guid="ancient",
+                status=S.READY_FOR_DIGEST,
+                published_at=datetime(2026, 3, 1, tzinfo=UTC),
+                tier1=tier1_block(8),
+            )
+        )
+        assert (await run(settings, store)).episode_ids == []
+
+    async def test_an_old_episode_that_only_now_finished_is_still_listed(
+        self, settings, store: MemoryStore
+    ) -> None:
+        """Behind every window by publish date, so it sat READY_FOR_DIGEST for good."""
+        store.seed(
+            make_episode(
+                guid="late",
+                status=S.READY_FOR_DIGEST,
+                published_at=datetime(2026, 3, 1, tzinfo=UTC),
+                tier1=tier1_block(8),
+            )
+        )
+        result = await run(settings, store)
+        assert result.episode_ids == [make_episode(guid="late")["_id"]]
+        doc = await store.get(make_episode(guid="late")["_id"])
+        assert doc is not None
+        assert doc["status"] == S.PUBLISHED.value
+
+    async def test_a_stale_claim_from_an_earlier_listing_does_not_hide_it(
+        self, settings, store: MemoryStore
+    ) -> None:
+        """Listed as a low score, later re-scored up: the claim describes the old listing."""
+        store.seed(
+            make_episode(
+                guid="rescored",
+                status=S.READY_FOR_DIGEST,
+                digest_id="digest:2026-W20",
+                published_at=datetime(2026, 7, 28, tzinfo=UTC),
+                tier1=tier1_block(7),
+            )
+        )
+        result = await run(settings, store)
+        doc = await store.get(make_episode(guid="rescored")["_id"])
+        assert doc is not None
+        assert doc["status"] == S.PUBLISHED.value
+        assert doc["digest_id"] == result.digest_id
+
+    async def test_a_live_claim_on_an_audit_row_is_still_respected(
+        self, settings, store: MemoryStore
+    ) -> None:
+        store.seed(
+            make_episode(
+                guid="low",
+                status=S.SCORED_LOW,
+                digest_id="digest:2026-W20",
+                published_at=datetime(2026, 7, 28, tzinfo=UTC),
+                tier1=tier1_block(2),
+            )
+        )
+        assert (await run(settings, store)).episode_ids == []
+
+    async def test_archive_material_stays_out_of_the_weekly_digest(
+        self, settings, store: MemoryStore
+    ) -> None:
+        store.seed(
+            make_episode(
+                guid="archive",
+                status=S.READY_FOR_DIGEST,
+                origin=BACKFILL_ORIGIN,
+                published_at=datetime(2025, 7, 1, tzinfo=UTC),
+                tier1=tier1_block(8),
+            )
+        )
+        assert (await run(settings, store)).episode_ids == []
+
+
 class TestPublishing:
     async def test_digestable_episodes_become_published(self, settings, store: MemoryStore) -> None:
         seed_corpus(store)
