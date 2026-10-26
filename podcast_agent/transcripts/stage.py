@@ -39,8 +39,30 @@ class TranscriptStage:
         self._settings = settings
         self._store = store
         self._acquirer = acquirer
+        #: Episodes being transcribed right now, by this process.
+        self._active: set[str] = set()
+
+    def is_active(self, episode_id: str) -> bool:
+        return episode_id in self._active
 
     async def process(self, episode: Doc, *, allow_asr: bool = True) -> EpisodeStatus:
+        episode_id = episode["_id"]
+        if episode_id in self._active:
+            # A second caller — the scheduled pipeline meeting a manual
+            # "Summarise", say — must not run alongside the first. Both would
+            # work on the one audio file per episode; the first to finish
+            # deletes it, and the other then fails reading it and tries to
+            # requeue an episode that is already TRANSCRIBED, which the state
+            # machine rightly refuses, leaving it in ERROR with a good transcript.
+            log.info("transcript.already_running", episode_id=episode_id)
+            return EpisodeStatus.AWAITING_TRANSCRIPT
+        self._active.add(episode_id)
+        try:
+            return await self._process(episode, allow_asr=allow_asr)
+        finally:
+            self._active.discard(episode_id)
+
+    async def _process(self, episode: Doc, *, allow_asr: bool) -> EpisodeStatus:
         episode_id = episode["_id"]
         attempts_before = attempt_count(episode, "transcript")
         crashes_before = attempt_count(episode, "transcript_crash")

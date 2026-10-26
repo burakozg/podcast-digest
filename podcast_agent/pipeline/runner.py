@@ -558,7 +558,7 @@ class PipelineRunner:
         summarised from its description and labelled ``description_only`` rather
         than being left queued with nothing to show.
         """
-        if episode_id in self._episodes_in_flight:
+        if self.is_episode_in_flight(episode_id):
             raise JobBusy(f"{episode_id} is already being summarised")
 
         episode = await self._store.get(episode_id)
@@ -648,7 +648,7 @@ class PipelineRunner:
             clear_run_context()
 
     def is_episode_in_flight(self, episode_id: str) -> bool:
-        return episode_id in self._episodes_in_flight
+        return episode_id in self._episodes_in_flight or self._transcripts.is_active(episode_id)
 
     def _remember(self, job: str, summary: dict[str, Any]) -> None:
         """Record a completed job, in memory and on disk.
@@ -768,6 +768,10 @@ class PipelineRunner:
             return
         log.info("stage.transcripts_start", queued=len(episodes))
         for episode in episodes:
+            if self.is_episode_in_flight(episode["_id"]):
+                # A manual "Summarise" put it in this queue and is already
+                # transcribing it; a second pass would race it for the audio file.
+                continue
             try:
                 # Per-show switch: ASR is the expensive path, so only shows
                 # explicitly marked for it may transcribe.

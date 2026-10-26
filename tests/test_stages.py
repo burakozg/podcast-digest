@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,11 @@ from podcast_agent.models import ChunkBullets, Route, Tier0Result, Tier1Result
 from podcast_agent.net import UrlGuard, build_client
 from podcast_agent.state import EpisodeStatus
 from podcast_agent.summarize.tier1 import Tier1Stage
-from podcast_agent.transcripts.acquire import TranscriptAcquirer, TranscriptUnavailable
+from podcast_agent.transcripts.acquire import (
+    TranscriptAcquirer,
+    TranscriptResult,
+    TranscriptUnavailable,
+)
 from podcast_agent.transcripts.asr import ASRResult, ASRUnavailable
 from podcast_agent.transcripts.stage import CRASH_BUDGET, TranscriptStage
 from podcast_agent.triage.tier0 import Tier0Stage
@@ -472,6 +477,44 @@ class TestTranscriptAcquisition:
         async with build_client() as client:
             await build_acquirer(settings, store, client, asr).acquire(make_episode())
         assert page.call_count == 0
+
+
+class TestOneTranscriptionPerEpisode:
+    """Two callers must not transcribe the same episode at once.
+
+    A manual "Summarise" and the scheduled pipeline both reached one episode.
+    The first to finish deleted the shared audio file, the second failed reading
+    it and tried to requeue an already-TRANSCRIBED episode: ERROR, with a good
+    transcript stored and no summary.
+    """
+
+    async def test_a_second_caller_backs_off_untouched(self, settings, store: MemoryStore) -> None:
+        episode = make_episode(status=S.AWAITING_TRANSCRIPT)
+        store.seed(episode)
+        release = asyncio.Event()
+        started = asyncio.Event()
+        calls = 0
+
+        class _SlowAcquirer:
+            async def acquire(self, doc, *, allow_asr=True):
+                nonlocal calls
+                calls += 1
+                started.set()
+                await release.wait()
+                return TranscriptResult(text=LONG_TEXT, source="asr")
+
+        stage = TranscriptStage(settings, store, _SlowAcquirer())
+        first = asyncio.create_task(stage.process(episode))
+        await started.wait()
+        assert stage.is_active(episode["_id"])
+
+        assert await stage.process(episode) is S.AWAITING_TRANSCRIPT
+        assert calls == 1
+
+        release.set()
+        assert await first is S.TRANSCRIBED
+        assert not stage.is_active(episode["_id"])
+        assert (await store.get(episode["_id"]))["status"] == S.TRANSCRIBED.value
 
 
 class TestTranscriptCrashSafety:
