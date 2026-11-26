@@ -1,5 +1,12 @@
 # Podcast Digest Agent
 
+> **Where this runs now (2026-11):** a Debian Docker server, no longer the QNAP
+> NAS. Where this document says "NAS" or `qnet`, read *deploy server* and its LAN
+> macvlan; directories, addresses and network names did not change. SSH is on the
+> standard port, docker is `/usr/bin/docker`, and there is no Container Station.
+> QNAP-specific steps and measurements below are history. See
+> `homelab/server/README.md`.
+
 Self-hosted agent that monitors cybersecurity podcasts, decides which episodes
 matter to *you*, summarises those, and writes a weekly Markdown digest into an
 Obsidian-compatible synced folder. You read summaries instead of listening.

@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# deploy.lib.sh — shared QNAP NAS deployment plumbing for the homelab projects.
+# deploy.lib.sh — shared deployment plumbing for the homelab projects.
+#
+# "NAS" in the names here (nas_*, NAS_*) means THE DEPLOY SERVER. It was a QNAP
+# NAS until 2026-11; it is now a plain Debian machine running Docker (see
+# homelab/server/). The names were kept: every project uses them.
 #
 # CANONICAL COPY: homelab/deploy.lib.sh. This file is VENDORED — an exact byte
 # copy — into family_calendar/, podcast-digest/, security-digest/ and taster/,
@@ -43,28 +47,16 @@ nas_load_env() {
   NAS_SSH="${NAS_SSH:-deploy@nas.local}"
   NAS_SSH_PORT="${NAS_SSH_PORT:-22}"
   NAS_APP_DIR="${NAS_APP_DIR:-${default_app_dir}}"
-  # Container Station's docker is not on PATH for non-interactive SSH commands —
-  # QNAP only wires it in for interactive logins — so it is addressed by full path.
-  NAS_DOCKER_BIN="${NAS_DOCKER_BIN:-/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker}"
-  # This Mac is arm64 and the NAS is x86_64. Building for the wrong architecture
+  # Full path, so a non-interactive ssh session never depends on PATH.
+  NAS_DOCKER_BIN="${NAS_DOCKER_BIN:-/usr/bin/docker}"
+  # This Mac is arm64 and the server is x86_64. Building for the wrong architecture
   # produces an image that dies with "exec format error" on first start — not a
   # partial failure, a silent non-start. Pinned rather than inferred; confirm a
-  # new NAS with `ssh -p "$NAS_SSH_PORT" "$NAS_SSH" uname -m`.
+  # new server with `ssh -p "$NAS_SSH_PORT" "$NAS_SSH" uname -m`.
   NAS_PLATFORM="${NAS_PLATFORM:-linux/amd64}"
-  # `docker` on this NAS is a shell wrapper that sources ld-wrapper.sh, which
-  # does an UNCONDITIONAL `export HOME=$QPKG_DIR/homes/$(id -un)`. That directory
-  # is drwxr-x--- root:administrators, so any account without one already there
-  # cannot create it — and the CLI dies with
-  #   mkdir .../container-station/homes/<user>: permission denied
-  # before doing any work. Setting HOME yourself does nothing; the wrapper
-  # overwrites it. DOCKER_CONFIG is honoured in preference to $HOME/.docker and
-  # the wrapper leaves it alone, so that is the lever that actually works.
-  #
-  # Subcommands needing no config dir (`ps`, `config`, plain `up -d`) survive
-  # without it, which is why this only surfaced on `--build`.
-  #
-  # Only CLI/buildx scratch state lives there and costs nothing to recreate; no
-  # registry credentials are involved, every image here is local.
+  # Scratch state for the docker CLI on the server; costs nothing to recreate,
+  # and no registry credentials are involved. (Needed on QNAP, whose docker
+  # wrapper broke $HOME; harmless elsewhere.)
   NAS_DOCKER_CONFIG="${NAS_DOCKER_CONFIG:-/tmp/.docker-\$(id -un)}"
   NAS_DOCKER_ENV="DOCKER_CONFIG=${NAS_DOCKER_CONFIG}"
 
@@ -442,39 +434,6 @@ nas_render() {
     && die "${out} still contains a PLACEHOLDER token — a substitution didn't match.
      Shipping it would deploy a literal placeholder as a real value."
   echo "✓ Wrote ${out}"
-}
-
-# nas_render_to_paste <template> <out> [sed-expr]...
-#
-# As above, plus the clipboard: for a file whose only consumer is a human
-# pasting it into Container Station's UI.
-nas_render_to_paste() {
-  local out="$2"
-  nas_render "$@"
-  if command -v pbcopy >/dev/null 2>&1; then
-    pbcopy < "$out"
-    echo "  (copied to your clipboard)"
-  fi
-  echo "  Paste THAT file into Container Station — not ${1}, which holds placeholders."
-}
-
-# What "apply" means for a Container Station-managed project. Deliberately NOT
-# `docker run`: Container Station owns the lifecycle, and a script that stops and
-# recreates the container itself reverts it to whatever convention the script
-# hard-codes (port mappings instead of static IPs, most memorably) with nothing
-# in the output to say so. That footgun is exactly what the old --skip-run flag
-# existed to avoid, and removing it is what let the flag go.
-nas_station_recreate_notice() {
-  local what="${1:-the application}"
-  cat <<EOF
-
-  Now, in Container Station:
-    Applications → ${what} → Recreate → select all, paste, Recreate.
-
-  ⚠ Container Station stores its OWN copy of the YAML. Recreate re-reads the
-    stored copy, not your file — so a changed mount has zero effect until the
-    rendered YAML above is pasted in again.
-EOF
 }
 
 # ── checking ──────────────────────────────────────────────────────────────────

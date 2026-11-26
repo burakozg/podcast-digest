@@ -1,5 +1,12 @@
 # Deploying to the NAS
 
+> **Where this runs now (2026-11):** a Debian Docker server, no longer the QNAP
+> NAS. Where this document says "NAS" or `qnet`, read *deploy server* and its LAN
+> macvlan; directories, addresses and network names did not change. SSH is on the
+> standard port, docker is `/usr/bin/docker`, and there is no Container Station.
+> QNAP-specific steps and measurements below are history. See
+> `homelab/server/README.md`.
+
 The permanent home. Both services run as containers — CouchDB and the agent — with all
 state under one directory the NAS's own backup jobs can see.
 
@@ -35,7 +42,7 @@ Each of these cost something to find out. They are why `docker-compose.nas.yml` 
 | **No `scp`/`sftp`** | This QNAP's sshd exposes no SFTP subsystem. `scp` fails with `subsystem request failed on channel 0`, exit 255 — and **silently** when a script wraps it in `2>/dev/null \|\| true`. Everything moves over plain SSH pipes. |
 | **No `python3`** | `scripts/backup.sh` and `scripts/restore.sh` both need it. The restore is therefore driven **from the Mac**; the nightly backup uses `qnap/backup-nas.sh`, which verifies with curl/gzip/sed instead. |
 | **`/bin/bash` is a symlink to `sh`** | Anything run on the NAS host must be POSIX. No `pipefail`, no `[[ ]]`. |
-| **`docker` is not on `PATH`** | Only wired in for interactive logins. Scripts use the full path `/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker`. |
+| **`docker` is not on `PATH`** | Only wired in for interactive logins. Scripts use the full path `/usr/bin/docker`. |
 | **qnet has no embedded DNS** | Service names do not resolve on it, and container-to-container traffic between two qnet containers has been observed to fail outright. It's why the agent and CouchDB share the plain `internal` bridge for `couchdb.url` rather than any qnet-adjacent network — true regardless of whatever network the agent joins for its LAN-facing hop (today, `homelab-internal`, via Traefik). |
 | **Memory** | ~7.8 GB total, ~3 GB genuinely free, shared with Home Assistant, traefik, two other digest services and the wyoming voice stack. Hence `small.en` ASR and a 2 GB agent limit. |
 
@@ -46,8 +53,8 @@ Each of these cost something to find out. They are why `docker-compose.nas.yml` 
 ### 1. Directories
 
 ```bash
-export NAS=deploy@nas.local P=44
-export D=/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker
+export NAS=deploy@nas.local P=22
+export D=/usr/bin/docker
 export APP=/share/Container/podcast-digest
 
 ssh -p $P $NAS "mkdir -p $APP/couchdb/data $APP/couchdb/config \
