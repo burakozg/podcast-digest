@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from collections import Counter
 from enum import StrEnum
 from functools import lru_cache
@@ -734,6 +735,9 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="PODAGENT_",
+        # Validation errors reach the startup log, and a rejected value may be
+        # a nearly-right secret.
+        hide_input_in_errors=True,
         env_nested_delimiter="__",
         # A typo'd key in config.yaml must be a startup crash, not a silent no-op.
         extra="forbid",
@@ -778,6 +782,21 @@ class Settings(BaseSettings):
     #: this is a credential for *its* API, not one of ours.
     video_digest_api_key: SecretStr | None = None
     openrouter_api_key: SecretStr | None = None
+    #: The secret in the private podcast feed's URL (api/feed.py). Unset leaves
+    #: the feed off. It is the only thing guarding that path, hence the floor on
+    #: its length.
+    feed_token: SecretStr | None = None
+
+    @field_validator("feed_token", mode="before")
+    @classmethod
+    def _check_feed_token(cls, value: Any) -> Any:
+        if value is None or value == "":
+            return None
+        raw = value.get_secret_value() if isinstance(value, SecretStr) else str(value)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{32,}", raw):
+            # The value stays out of the message: startup errors are logged.
+            raise ValueError("must be at least 32 characters of A-Z, a-z, 0-9, _ or -")
+        return value
 
     @classmethod
     def settings_customise_sources(

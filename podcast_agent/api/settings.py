@@ -260,7 +260,7 @@ async def reset_settings(request: Request) -> dict[str, Any]:
 
 #: Secrets are excluded from the round-trip: they are SecretStr in the dump and
 #: come back from the environment on re-validation anyway.
-_SECRET_FIELDS = frozenset({"couchdb_password", "openrouter_api_key", "ntfy_token"})
+_SECRET_FIELDS = frozenset({"couchdb_password", "openrouter_api_key", "ntfy_token", "feed_token"})
 
 
 def _validate_against(settings: Settings, overrides: dict[str, Any], *, baseline: Settings) -> None:

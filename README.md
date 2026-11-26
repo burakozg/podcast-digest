@@ -65,6 +65,8 @@ after each entry is what adopting it takes on a deployment already running.
        overwritten. See DEPLOY-NAS.md, "Redeploying after a code change".
      - Full history is git log. This list never claims completeness. -->
 
+- The narrated digests can be followed as a private podcast feed — *rebuild*;
+  set `PODAGENT_FEED_TOKEN` and add the proxy rule
 - Unread summaries — podcasts and imported videos both — are listed as tappable
   checkboxes in one vault note, so they can be read, marked read and starred on a
   phone with no network; the taps come back into the console — *rebuild*
@@ -84,8 +86,6 @@ after each entry is what adopting it takes on a deployment already running.
 - Deploying is `./deploy` with `ship` / `apply` / `check`, the same three verbs
   as the other NAS projects ([`5796e4f`](../../commit/5796e4f)) — *rebuild, and
   `NAS_LAN_IP` becomes `APP_LAN_IP` in the NAS `.env` (the old name still works)*
-- Archive episodes stay queued instead of erroring when the transcriber is
-  asleep ([`4b1385b`](../../commit/4b1385b)) — *rebuild*
 - Initial release: ingestion, two-tier triage, ASR, weekly digest, consoles
   ([`56a8761`](../../commit/56a8761))
 
@@ -702,6 +702,36 @@ exactly what it looks like.
 
 Per-episode note files (`output.episode_notes: true`) are off by default.
 
+### As a private podcast
+
+The narrated digests (`tts.enabled`) can be followed in a podcast player, for
+speed control, skipping, resume, CarPlay and automatic downloads. Set
+`PODAGENT_FEED_TOKEN` in `.env` (`openssl rand -hex 32`), redeploy, and follow
+
+```
+http://<console-host>/podcast-feed/<token>/feed.xml
+```
+
+In Apple Podcasts: Library → ··· → **Follow a Show by URL**. Each narrated week
+is one episode; unset, the feed answers 404.
+
+A player cannot get past a reverse proxy's login page, so the proxy has to let
+this one prefix through. With Traefik, beside the console's own router:
+
+```yaml
+podcastDigest-feed:
+  rule: "Host(`<console-host>`) && PathPrefix(`/podcast-feed/`)"
+  service: "podcastDigest"
+  priority: 10        # above the router that requires login
+  entryPoints: [web]
+```
+
+- **The token is the only lock on that path.** Treat the URL as a password. A
+  proxy access log records it. To revoke it, change it and follow the new URL.
+- **LAN only,** like the rest of this service. Episodes download at home and then
+  play anywhere. Players that fetch feeds from their own servers (Overcast and
+  Pocket Casts, as far as we know) cannot reach it.
+
 ### Into Obsidian, without copying files
 
 Digests are files on a disk, which is only useful on the machine holding that
@@ -1223,6 +1253,8 @@ covers the mechanisms; the operational rules are:
   and sits on an internal-only Docker network, unreachable from the LAN — that
   is the property the compose network layout exists for, and a test asserts it.
   Whoever can write to that database can change where model work is sent.
+- The one path meant to skip that login is `/podcast-feed/`, guarded by the
+  secret in its URL and serving only the feed and its audio.
 - The console is gated by a shared reverse-proxy login now, not an app-level
   key — it carries no credential itself, and every value arrives over the
   authenticated API once the browser holds a valid session. Still LAN-only.
