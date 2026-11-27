@@ -86,7 +86,8 @@
   .lastrun.ran { color: var(--good); }
   .lastrun.never { color: var(--warn); }
   .lastrun.busy { color: var(--accent); font-weight: 600; }
-  select, input[type=search] {
+  #feedUrl { flex: 1; min-width: 0; }
+  select, input[type=search], input[type=text] {
     font: inherit; font-size: .88rem; padding: .4rem .55rem; border-radius: 7px;
     border: 1px solid var(--line); background: var(--bg); color: var(--ink);
   }
@@ -213,6 +214,23 @@
       <div style="margin-top:.7rem" id="costRows"></div>
     </section>
   </div>
+
+  <section>
+    <h2>Private podcast feed</h2>
+    <div id="feedOn" hidden>
+      <p class="sub" style="margin:-.35rem 0 .7rem">
+        On the home network, open Library → ··· in Apple Podcasts and choose
+        the option to follow by URL. Anyone with this address can listen without logging in.
+      </p>
+      <div class="controls">
+        <input type="text" id="feedUrl" readonly aria-label="Feed address">
+        <button id="feedCopy">Copy</button>
+      </div>
+    </div>
+    <p class="sub" id="feedOff" hidden>
+      Off. Set <code>PODAGENT_FEED_TOKEN</code> and redeploy to turn it on.
+    </p>
+  </section>
 
   <section>
     <h2>Last response</h2>
@@ -422,11 +440,40 @@
     });
   }
 
+  // Once, not on the refresh timer: it only changes with a redeploy, and
+  // rewriting the field would drop a selection someone is copying.
+  async function showFeed() {
+    try {
+      const { path } = await api("/api/v1/feed");
+      $("feedOff").hidden = Boolean(path);
+      $("feedOn").hidden = !path;
+      if (path) $("feedUrl").value = `${location.origin}${path}`;
+    } catch (err) {
+      say(`Could not read the feed address: ${err.message}`, "err");
+    }
+  }
+
+  // The clipboard API exists only over HTTPS, which this console may not be, so
+  // fall back to copying the selection.
+  async function copyFeed() {
+    const field = $("feedUrl");
+    field.select();
+    try {
+      if (navigator.clipboard) await navigator.clipboard.writeText(field.value);
+      else if (!document.execCommand("copy")) throw new Error("copy refused");
+      say("Feed address copied.");
+    } catch {
+      say("Copy failed — the address is selected, copy it by hand.", "err");
+    }
+  }
+
   function start() {
+    showFeed();
     refresh();
     if (!timer) timer = setInterval(refresh, 5000);
   }
 
+  $("feedCopy").addEventListener("click", copyFeed);
   wire();
   start();
 })();

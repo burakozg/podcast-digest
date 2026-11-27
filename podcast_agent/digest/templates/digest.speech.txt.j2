@@ -22,12 +22,14 @@ Nothing was summarised in this period.
 Across the week.
 
 {% for t in synthesis.themes %}
+{{ chapter(t.title | speech) }}
 {{ t.title | speech }}.{% if t.shows %} Heard on {{ t.shows | join(', ') }}.{% endif %}
 
 {{ t.summary | speech }}
 
 {% endfor %}
 {% if synthesis.disagreements %}
+{{ chapter("Where they disagreed") }}
 Where they disagreed.
 
 {% for line in synthesis.disagreements %}
@@ -36,6 +38,7 @@ Where they disagreed.
 {% endfor %}
 {% endif %}
 {% if synthesis.whats_new %}
+{{ chapter("New since last week") }}
 New since last week.
 
 {% for line in synthesis.whats_new %}
@@ -45,9 +48,12 @@ New since last week.
 {% endif %}
 {% endif %}
 {% if top_picks %}
+{% for e in top_picks %}
+{{ chapter((e.podcast_name | speech) ~ ": " ~ (e.title | speech)) }}
+{% if loop.first %}
 Top picks.
 
-{% for e in top_picks %}
+{% endif %}
 From {{ e.podcast_name | speech }}: {{ e.title | speech }}.
 
 {% if e.why_it_matters %}
@@ -70,9 +76,12 @@ Key takeaways.
 {% endfor %}
 {% endif %}
 {% if also_relevant %}
+{% for e in also_relevant %}
+{{ chapter((e.podcast_name | speech) ~ ": " ~ (e.title | speech)) }}
+{% if loop.first %}
 Also relevant.
 
-{% for e in also_relevant %}
+{% endif %}
 From {{ e.podcast_name | speech }}: {{ e.title | speech }}.
 
 {% if e.why_it_matters %}
@@ -87,4 +96,5 @@ Why it matters. {{ e.why_it_matters | speech }}
 {% endif %}
 {% endfor %}
 {% endif %}
+{{ chapter("End") }}
 That is the digest for week {{ week_number }}.

@@ -65,8 +65,9 @@ after each entry is what adopting it takes on a deployment already running.
        overwritten. See DEPLOY-NAS.md, "Redeploying after a code change".
      - Full history is git log. This list never claims completeness. -->
 
-- The narrated digests can be followed as a private podcast feed — *rebuild*;
-  set `PODAGENT_FEED_TOKEN` and add the proxy rule
+- The narrated digests can be followed as a private podcast feed, with cover
+  art, show notes and chapters — *rebuild*; set `PODAGENT_FEED_TOKEN` and add
+  the proxy rule
 - Unread summaries — podcasts and imported videos both — are listed as tappable
   checkboxes in one vault note, so they can be read, marked read and starred on a
   phone with no network; the taps come back into the console — *rebuild*
@@ -712,8 +713,19 @@ speed control, skipping, resume, CarPlay and automatic downloads. Set
 http://<console-host>/podcast-feed/<token>/feed.xml
 ```
 
+The console's Operations page shows the full address with a copy button.
+
 In Apple Podcasts: Library → ··· → **Follow a Show by URL**. Each narrated week
 is one episode; unset, the feed answers 404.
+
+An episode is titled after the week's first theme, and its notes hold the themes,
+the top picks with links to the originals, and a timestamp for each section of
+the audio, which players can turn into chapters. Timestamps exist only for weeks
+narrated since this was added; `POST /api/v1/digests/{week}/narrate?force=true`
+reads an older one again. The cover is
+`podcast_agent/api/static/podcast-cover.jpg` — rename it if you change it, since
+players cache artwork by address. Each episode also has its own picture — week
+number and lead theme — drawn on request by `podcast_agent/digest/cover.py`.
 
 A player cannot get past a reverse proxy's login page, so the proxy has to let
 this one prefix through. With Traefik, beside the console's own router:

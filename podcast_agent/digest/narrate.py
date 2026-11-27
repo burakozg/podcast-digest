@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,6 +32,8 @@ from ..logging_setup import get_logger
 from ..speech import SpeechBackend
 from ..utils import digest_doc_id, iso_now
 from .generate import BASIS_LABELS, _build_env, summary_view
+from .id3 import chapter_tag
+from .mp3 import duration_s
 from .read import DigestUnreadable, digest_period_key, digest_runs, resolve_within
 from .synthesis import as_view
 
@@ -49,6 +52,18 @@ _H1 = re.compile(r"^#\s+.*$", re.MULTILINE)
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 
+#: Brackets a chapter title in the rendered script. A NUL cannot arrive in the
+#: text around it, so feed content cannot invent a chapter.
+_CHAPTER = re.compile("\x00([^\x00]*)\x00")
+
+#: What precedes the first marker.
+_OPENING_CHAPTER = "Introduction"
+
+
+def _chapter_marker(title: str) -> str:
+    return "\x00" + " ".join(str(title).replace("\x00", " ").split()) + "\x00"
+
+
 class NothingToNarrate(Exception):
     """No digest matched, or the one that did has no summarised episodes."""
 
@@ -63,6 +78,9 @@ class NarrationResult:
     elapsed_s: float = 0.0
     embedded: bool = False
     episodes: list[str] = field(default_factory=list)
+    #: ``{"start_s", "title"}`` each. Empty when the audio could not be timed.
+    chapters: list[dict[str, Any]] = field(default_factory=list)
+    duration_s: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -110,6 +128,13 @@ def chunk_script(text: str, max_chars: int) -> list[str]:
     return chunks
 
 
+def split_chapters(script: str) -> list[tuple[str, str]]:
+    """``(title, text)`` for each chapter of a rendered script, in order."""
+    opening, *rest = _CHAPTER.split(script)
+    sections = [(_OPENING_CHAPTER, opening), *zip(rest[::2], rest[1::2], strict=True)]
+    return [(title, text) for title, text in sections if text.strip()]
+
+
 def _split_piece(piece: str, max_chars: int) -> list[str]:
     """One paragraph, cut down to pieces no longer than ``max_chars``."""
     if len(piece) <= max_chars:
@@ -136,12 +161,29 @@ def _split_piece(piece: str, max_chars: int) -> list[str]:
     return out
 
 
+def _prepend(path: Path, head: bytes) -> None:
+    """Put ``head`` in front of a file's contents without holding them in memory.
+
+    The chapter times are only known once the audio exists, and a tag belongs at
+    the start of it.
+    """
+    joined = path.with_name(f"{path.name}.tagged")
+    try:
+        with joined.open("wb") as out, path.open("rb") as body:
+            out.write(head)
+            shutil.copyfileobj(body, out)
+        os.replace(joined, path)
+    finally:
+        joined.unlink(missing_ok=True)
+
+
 class DigestNarrator:
     def __init__(self, settings: Settings, store: Store, backend: SpeechBackend) -> None:
         self._settings = settings
         self._store = store
         self._backend = backend
         self._env = _build_env()
+        self._env.globals["chapter"] = _chapter_marker
 
     async def narrate(
         self, period_key: str | None = None, *, force: bool = False
@@ -164,18 +206,24 @@ class DigestNarrator:
             raise NothingToNarrate(f"{key} has no summarised episodes")
 
         script = self._script(doc, run, episodes)
-        chunks = chunk_script(script, self._settings.tts.max_chars_per_request)
-        log.info("tts.start", period_key=key, chars=len(script), chunks=len(chunks))
+        # Each chapter is chunked on its own, so that it starts where a piece of
+        # audio does and its time is known without listening for it.
+        limit = self._settings.tts.max_chars_per_request
+        sections = [(t, chunk_script(body, limit)) for t, body in split_chapters(script)]
+        total = sum(len(chunks) for _, chunks in sections)
+        log.info("tts.start", period_key=key, chars=len(script), chunks=total)
 
         started = time.monotonic()
-        written = await self._synthesize_to(audio_path, chunks)
+        written, chapters, length = await self._synthesize_to(audio_path, sections)
         elapsed = time.monotonic() - started
 
         result = NarrationResult(
             period_key=key,
             audio_path=audio_path,
-            chunks=len(chunks),
+            chunks=total,
             bytes_written=written,
+            chapters=chapters,
+            duration_s=length,
             elapsed_s=elapsed,
             episodes=[e["episode_id"] for e in episodes],
         )
@@ -255,8 +303,14 @@ class DigestNarrator:
 
     # --- synthesis ----------------------------------------------------------
 
-    async def _synthesize_to(self, audio_path: Path, chunks: list[str]) -> int:
+    async def _synthesize_to(
+        self, audio_path: Path, sections: list[tuple[str, list[str]]]
+    ) -> tuple[int, list[dict[str, Any]], float | None]:
         """Render every chunk into ``audio_path``, atomically.
+
+        Returns the bytes written, where each section starts, and the total
+        playing time. The last two are empty for audio that cannot be timed (any
+        format but MP3): a guessed chapter time is worse than none.
 
         Appended to a temp file rather than accumulated in memory: this process
         has already been OOM-killed once for holding audio in RAM (see
@@ -266,19 +320,35 @@ class DigestNarrator:
         """
         audio_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = audio_path.with_name(f".{audio_path.name}.tmp")
+        total = sum(len(chunks) for _, chunks in sections)
         written = 0
+        index = 0
+        elapsed = 0.0
+        timed = True
+        chapters: list[dict[str, Any]] = []
         try:
             with tmp.open("wb") as handle:
-                for index, chunk in enumerate(chunks, start=1):
-                    audio = await self._backend.synthesize(chunk)
-                    handle.write(audio)
-                    written += len(audio)
-                    log.debug("tts.progress", chunk=index, of=len(chunks), bytes=written)
+                for title, chunks in sections:
+                    chapters.append({"start_s": round(elapsed, 1), "title": title})
+                    for chunk in chunks:
+                        index += 1
+                        audio = await self._backend.synthesize(chunk)
+                        handle.write(audio)
+                        written += len(audio)
+                        length = duration_s(audio)
+                        timed = timed and length is not None
+                        elapsed += length or 0.0
+                        log.debug("tts.progress", chunk=index, of=total, bytes=written)
+            if not timed:
+                chapters = []
+            if tag := chapter_tag(chapters, elapsed):
+                _prepend(tmp, tag)
+                written += len(tag)
             os.replace(tmp, audio_path)
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
-        return written
+        return written, chapters, round(elapsed, 1) if timed else None
 
     # --- the note -----------------------------------------------------------
 
@@ -323,6 +393,8 @@ class DigestNarrator:
             "audio_path": str(result.audio_path),
             "bytes": result.bytes_written,
             "chunks": result.chunks,
+            "duration_s": result.duration_s,
+            "chapters": result.chapters,
             "voice": self._settings.tts.voice,
             "model": self._settings.tts.model,
             "elapsed_s": round(result.elapsed_s, 1),

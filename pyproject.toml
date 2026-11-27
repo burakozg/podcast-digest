@@ -28,6 +28,7 @@ dependencies = [
     "lxml>=5.3",
     "tldextract>=5.1",
     "tenacity>=9.0",
+    "pillow>=13.0.0",
 ]
 
 [project.optional-dependencies]

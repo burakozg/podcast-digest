@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import ValidationError
 
 from . import __version__, logstore
+from .api.feed import console_router as feed_console_router
 from .api.feed import router as feed_router
 from .api.pages import page
 from .api.podcasts import router as podcasts_router
@@ -479,6 +480,7 @@ def build_app(settings: Settings, *, store: Store | None = None, llm: Any = None
     app.include_router(podcasts_router)
     app.include_router(settings_router)
     app.include_router(feed_router)
+    app.include_router(feed_console_router)
 
     @app.exception_handler(StoreError)
     async def _store_unavailable(_request: Any, exc: StoreError) -> JSONResponse:

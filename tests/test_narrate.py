@@ -16,6 +16,8 @@ from helpers import make_episode, make_settings
 
 from podcast_agent.config import LoggingConfig, TTSConfig
 from podcast_agent.db import MemoryStore
+from podcast_agent.digest.id3 import chapter_tag
+from podcast_agent.digest.mp3 import duration_s
 from podcast_agent.digest.narrate import (
     DigestNarrator,
     NothingToNarrate,
@@ -179,6 +181,14 @@ class FakeSpeech:
         return None
 
 
+class TimedSpeech(FakeSpeech):
+    """Answers every request with one second of real MP3 frames, near enough."""
+
+    async def synthesize(self, text: str) -> bytes:
+        await super().synthesize(text)
+        return (bytes([0xFF, 0xF3, 0xC4, 0xC4]) + bytes(380)) * 42
+
+
 class TestNarration:
     def _settings(self, tmp_path: Path) -> Any:
         return make_settings(tmp_path, tts={"enabled": True, "base_url": "http://mac.lan:8880"})
@@ -288,6 +298,46 @@ class TestNarration:
             f"[{i}]".encode() for i in range(1, len(speech.calls) + 1)
         )
         assert result.bytes_written == result.audio_path.stat().st_size
+
+    async def test_chapters_start_where_their_audio_does(
+        self, tmp_path: Path, store: MemoryStore
+    ) -> None:
+        self._seed(store, tmp_path)
+        speech = TimedSpeech()
+        result = await self._narrator(tmp_path, store, speech).narrate()
+
+        titles = [c["title"] for c in result.chapters]
+        assert titles[0] == "Introduction"
+        assert titles[-1] == "End"
+        assert any("Ransomware crews are hiring 0" in t for t in titles)
+        # One second of audio per request, and every chapter opens a request.
+        starts = [c["start_s"] for c in result.chapters]
+        assert starts == sorted(set(starts))
+        assert all(s == pytest.approx(round(s), abs=0.1) for s in starts)
+        assert result.duration_s == pytest.approx(len(speech.calls), abs=0.1)
+        # The markers shape the audio and are never part of it.
+        assert not any("\x00" in call for call in speech.calls)
+
+        doc = await store.get(digest_doc_id("2026-W31"))
+        assert doc is not None
+        assert doc["runs"][0]["narration"]["chapters"] == result.chapters
+
+        assert result.audio_path is not None
+        audio = result.audio_path.read_bytes()
+        assert audio.startswith(chapter_tag(result.chapters, result.duration_s or 0)[:6])
+        assert audio.count(b"CHAP") == len(result.chapters)
+        assert result.bytes_written == len(audio)
+        assert duration_s(audio) == pytest.approx(len(speech.calls), abs=0.1)
+        assert [p.name for p in result.audio_path.parent.glob(".*")] == []
+
+    async def test_untimeable_audio_gets_no_chapters(
+        self, tmp_path: Path, store: MemoryStore
+    ) -> None:
+        self._seed(store, tmp_path)
+        result = await self._narrator(tmp_path, store, FakeSpeech()).narrate()
+
+        assert result.chapters == []
+        assert result.duration_s is None
 
     async def test_the_script_is_speakable(self, tmp_path: Path, store: MemoryStore) -> None:
         self._seed(store, tmp_path)

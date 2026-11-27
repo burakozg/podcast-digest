@@ -9,7 +9,7 @@ from xml.etree import ElementTree as ET
 
 import pytest
 from fastapi.testclient import TestClient
-from helpers import FakeLLM, make_settings
+from helpers import FakeLLM, make_episode, make_settings
 from pydantic import ValidationError
 
 from podcast_agent.api.settings import _validate_against
@@ -83,6 +83,101 @@ def test_feed_lists_narrated_weeks_newest_first(client: TestClient) -> None:
     assert items[1].findtext("pubDate") == "Fri, 31 Jul 2026 06:00:00 +0000"
 
 
+def test_a_week_without_themes_keeps_the_plain_wording(client: TestClient) -> None:
+    item = _items(client)[0]
+
+    assert item.findtext("title") == "Week 32, 2026"
+    assert item.findtext("description") == "<p>2 episodes from week 32 of 2026.</p>"
+
+
+def test_show_notes_carry_themes_chapters_and_top_picks(
+    client: TestClient, store: MemoryStore, digest_dir: Path
+) -> None:
+    _write(digest_dir, "2026/d-W33.mp3")
+    pick = make_episode(
+        guid="pick",
+        title="Agents <script> loose",
+        link="https://example.com/ep?a=1&b=2",
+        tier1={
+            "relevance_score": 9,
+            "summary_md": "S.",
+            "why_it_matters": r"Matters a lot (ai\_agent\_security).",
+        },
+    )
+    store.seed(pick)
+    run = {
+        **_run("2026/d-W33.md", "2026-08-14T06:00:00Z"),
+        "episode_ids": [pick["_id"]],
+        "narration": {
+            "audio_path": str(digest_dir / "2026/d-W33.mp3"),
+            "duration_s": 3725.4,
+            "chapters": [
+                {"start_s": 0.0, "title": "Introduction"},
+                {"start_s": 3661.9, "title": "Agents & identity"},
+            ],
+        },
+    }
+    _seed(store, "2026-W33", run)
+    store._docs[digest_doc_id("2026-W33")]["synthesis"] = {
+        "themes": [{"title": "Agent identity", "summary": "Everyone worried.", "shows": []}],
+        "disagreements": [],
+        "whats_new": ["A <new> thing."],
+    }
+
+    item = _items(client)[0]
+
+    assert item.findtext("title") == "W33 · Agent identity"
+    assert item.findtext("{http://www.itunes.com/dtds/podcast-1.0.dtd}duration") == "3725"
+    notes = item.findtext("description") or ""
+    assert notes.startswith("<p>Agent identity</p><p>00:00:00 Introduction</p>")
+    assert "<p>01:01:01 Agents &amp; identity</p>" in notes
+    assert 'href="https://example.com/ep?a=1&amp;b=2"' in notes
+    assert "Matters a lot (ai_agent_security)." in notes
+    assert "<script>" not in notes and "<new>" not in notes
+    assert notes == item.findtext("{http://purl.org/rss/1.0/modules/content/}encoded")
+
+
+def test_chapters_of_other_audio_are_not_used(
+    client: TestClient, store: MemoryStore, digest_dir: Path
+) -> None:
+    run = _run("2026/d-W31.md", "2026-07-31T06:00:00Z")
+    run["narration"] = {
+        "audio_path": "/elsewhere/d-W31.opus",
+        "chapters": [{"start_s": 0.0, "title": "Stale chapter"}],
+    }
+    _seed(store, "2026-W31", run)
+
+    assert "Stale chapter" not in (_items(client)[1].findtext("description") or "")
+
+
+def test_cover_art_is_served_behind_the_token(client: TestClient) -> None:
+    channel = ET.fromstring(client.get(f"{BASE}/feed.xml").content)
+    image = channel.find("channel/{http://www.itunes.com/dtds/podcast-1.0.dtd}image")
+    assert image is not None
+
+    response = client.get(image.attrib["href"])
+
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.content.startswith(b"\xff\xd8")
+    assert client.get(f"/podcast-feed/{'b' * 40}/podcast-cover.jpg").status_code == 404
+
+
+def test_each_episode_has_its_own_cover(client: TestClient) -> None:
+    urls = []
+    for item in _items(client):
+        image = item.find("{http://www.itunes.com/dtds/podcast-1.0.dtd}image")
+        assert image is not None
+        urls.append(image.attrib["href"])
+    assert len(set(urls)) == 2
+
+    first, second = (client.get(url) for url in urls)
+    assert first.headers["content-type"] == "image/jpeg"
+    assert first.content != second.content
+    assert client.head(urls[0]).status_code == 200
+    assert client.get(urls[0].replace(TOKEN, "b" * 40)).status_code == 404
+    assert client.get(f"{BASE}/cover/d-W32-0000000000.jpg").status_code == 404
+
+
 def test_regenerated_week_replaces_audio_once_narrated(
     client: TestClient, digest_dir: Path
 ) -> None:
@@ -132,6 +227,25 @@ def test_path_outside_the_digest_directory_is_ignored(
 @pytest.mark.parametrize("path", ["feed.xml", "audio/d-W31.mp3"])
 def test_wrong_token_is_not_found(client: TestClient, path: str) -> None:
     assert client.get(f"/podcast-feed/{'b' * 40}/{path}").status_code == 404
+
+
+def test_console_can_find_the_address(client: TestClient) -> None:
+    response = client.get("/api/v1/feed")
+
+    assert response.json() == {"path": f"{BASE}/feed.xml"}
+    assert response.headers["cache-control"] == "no-store"
+    assert client.get(response.json()["path"]).status_code == 200
+
+
+def test_the_address_is_not_served_under_the_open_prefix(client: TestClient) -> None:
+    assert client.get("/podcast-feed/feed").status_code == 404
+    assert client.get(f"{BASE}/feed").status_code == 404
+
+
+def test_console_is_told_when_the_feed_is_off(tmp_path: Path, store: MemoryStore) -> None:
+    settings = make_settings(tmp_path)
+    with TestClient(build_app(settings, store=store, llm=FakeLLM())) as client:
+        assert client.get("/api/v1/feed").json() == {"path": None}
 
 
 @pytest.mark.parametrize("unset", [None, ""])
